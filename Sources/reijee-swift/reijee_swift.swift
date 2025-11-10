@@ -123,8 +123,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             await renderer.addObject(objectName: "triangle", geometry: triangle, pipelineName: "coloredTriangle")
             let cube = Cube()
             await renderer.addObject(objectName: "cube", geometry: cube, pipelineName: "coloredTriangle")
-            let plane = Plane()
-            await renderer.addObject(objectName: "plane", geometry: plane, pipelineName: "gridUnlimited")
+            let grid = Grid()
+            await renderer.addObject(objectName: "grid", geometry: grid, pipelineName: "gridUnlimited")
             // Запускаем анимацию в главном потоке
             await MainActor.run {
                 self.animationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [renderer] _ in

@@ -142,7 +142,7 @@ struct Cube: Geometry, Transformable {
     }
 }
 
-struct Plane: Geometry, Transformable {
+struct Grid: Geometry, Transformable {
     private var _vertices = [
         Vertex(position: SIMD3<Float>(-1000, 0, -1000), color: SIMD4<Float>(0.3, 0.3, 0.3, 1)),
         Vertex(position: SIMD3<Float>( 1000, 0, -1000), color: SIMD4<Float>(0.3, 0.3, 0.3, 1)),
