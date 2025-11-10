@@ -29,7 +29,7 @@ import MetalKit
 /// - Геометрия обновляется в фоновых потоках
 /// - Нет гонок данных благодаря двойной буферизации + RwLock
 class SceneObject: @unchecked Sendable {
-    fileprivate var geometry: RwLock<any _2DGeometry & _2DMovable>
+    fileprivate var geometry: RwLock<any Geometry & Transformable>
     fileprivate let pipelineName: String
     fileprivate var currentBufferIndex = RwLock<Int>(0)
 
@@ -39,7 +39,7 @@ class SceneObject: @unchecked Sendable {
     private var indexBuffers: MTLBuffer
 
 
-    init(geometry: any _2DGeometry & _2DMovable, pipelineName: String, vertexBuffer: MTLBuffer, indexBuffer: MTLBuffer, device: MTLDevice) {
+    init(geometry: any Geometry & Transformable, pipelineName: String, vertexBuffer: MTLBuffer, indexBuffer: MTLBuffer, device: MTLDevice) {
         self.geometry = RwLock(geometry)
         self.pipelineName = pipelineName
         self.vertexBuffers = [vertexBuffer, vertexBuffer]
@@ -49,7 +49,7 @@ class SceneObject: @unchecked Sendable {
 
     func updateBuffer() {
         let nextIndex = currentBufferIndex.read { ($0 + 1) % 2 }
-        let vertices = geometry.read { $0.vetricies() } 
+        let vertices = geometry.read { $0.vertices() } 
 
         vertexBuffers[nextIndex] = device.makeBuffer(
             bytes: vertices,
@@ -75,9 +75,9 @@ class SceneObject: @unchecked Sendable {
 }
 
 
-extension SceneObject: _2DMovable {
-    func traslate(_ dxyz: SIMD3<Float>) {
-        geometry.write { $0.traslate(dxyz) }
+extension SceneObject: Transformable {
+    func translate(_ dxyz: SIMD3<Float>) {
+        geometry.write { $0.translate(dxyz) }
         updateBuffer()
     }
     func rotate(_ angle: Float, axis: SIMD3<Float>) {
@@ -91,12 +91,12 @@ extension SceneObject: _2DMovable {
     }
 }
 
-extension SceneObject: _2DGeometry {
-    func vetricies() -> [Vertex] {
-        geometry.read { $0.vetricies() }
+extension SceneObject: Geometry {
+    func vertices() -> [Vertex] {
+        geometry.read { $0.vertices() }
     }
-    func indicies() -> [UInt16] {
-         geometry.read { $0.indicies() }
+    func indices() -> [UInt16] {
+        geometry.read { $0.indices() }
     }
 }
 

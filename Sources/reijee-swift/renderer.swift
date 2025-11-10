@@ -8,14 +8,18 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     fileprivate let scene: Scene
     fileprivate let depthStencilState: MTLDepthStencilState
     fileprivate let camera: Camera
+    private let pressedKeysProvider: () -> Set<UInt16>
+    private let shiftProvider: () -> Bool
 
 
-    init(_ device: MTLDevice) {
+    init(_ device: MTLDevice, pressedKeysProvider: @escaping () -> Set<UInt16>, shiftProvider: @escaping () -> Bool) {
         self.device = device
         self.commandQueue = device.makeCommandQueue()!
         self.scene = Scene()
         self.camera = Camera()
         self.shaderLibrary = ShaderLibrary(device: device)
+        self.pressedKeysProvider = pressedKeysProvider
+        self.shiftProvider = shiftProvider
 
         let depthDescriptor = MTLDepthStencilDescriptor()
         depthDescriptor.depthCompareFunction = .less
@@ -55,6 +59,7 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
 
 
     func draw(in view: MTKView) {
+        updateCamera()
         guard let drawable = view.currentDrawable else { return }
         guard let descriptor = view.currentRenderPassDescriptor else { return }
 
@@ -85,7 +90,7 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
             encoder.setDepthStencilState(depthStencilState)
             encoder.drawIndexedPrimitives(
                 type: .triangle, 
-                indexCount: object.indicies().count, 
+                indexCount: object.indices().count, 
                 indexType: .uint16, 
                 indexBuffer: object.getIndexBuffer(), 
                 indexBufferOffset: 0
@@ -104,13 +109,39 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
 
     }
+
+    func rotateCamera(yaw: Float, pitch: Float) {
+        camera.rotate(yaw: yaw, pitch: pitch)
+    }
+    
+    private func updateCamera() {
+        let pressedKeys = pressedKeysProvider()
+        let speed: Float = 0.1
+        var movement = SIMD3<Float>(0, 0, 0)
+        
+        if pressedKeys.contains(13) { movement.z += speed } // W (инвертировано)
+        if pressedKeys.contains(1) { movement.z -= speed }  // S (инвертировано)
+        if pressedKeys.contains(0) { movement.x += speed }  // A (инвертировано)
+        if pressedKeys.contains(2) { movement.x -= speed }  // D (инвертировано)
+        if pressedKeys.contains(49) { movement.y += speed } // Space
+        if shiftProvider() { movement.y -= speed } // Shift
+
+        if pressedKeys.contains(123) { camera.rotate(yaw: -0.02, pitch: 0) } // Left arrow
+        if pressedKeys.contains(124) { camera.rotate(yaw: 0.02, pitch: 0) }  // Right arrow
+        if pressedKeys.contains(126) { camera.rotate(yaw: 0, pitch: 0.02) }  // Up arrow
+        if pressedKeys.contains(125) { camera.rotate(yaw: 0, pitch: -0.02) } // Down arrow
+
+        if movement != SIMD3<Float>(0, 0, 0) {
+            camera.move(movement)
+        }
+    }
 }
 
 
 extension Renderer {
-    func addObject(objectName: String, geometry: any _2DGeometry & _2DMovable, pipelineName: String) async {
-        let vetricies = geometry.vetricies()
-        let indicies = geometry.indicies()
+    func addObject(objectName: String, geometry: any Geometry & Transformable, pipelineName: String) async {
+        let vetricies = geometry.vertices()
+        let indicies = geometry.indices()
         let vertexBuffer = device.makeBuffer(
             bytes: vetricies,
             length: vetricies.count * MemoryLayout<Vertex>.stride,

@@ -7,6 +7,18 @@ import MetalKit
 class AppDelegate: NSObject, NSApplicationDelegate {
     static func main() {
         let app = NSApplication.shared
+        app.setActivationPolicy(.regular)
+        
+        let menubar = NSMenu()
+        let appMenuItem = NSMenuItem()
+        menubar.addItem(appMenuItem)
+        app.mainMenu = menubar
+        
+        let appMenu = NSMenu()
+        let quitMenuItem = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(quitMenuItem)
+        appMenuItem.submenu = appMenu
+        
         let delegate = AppDelegate()
         app.delegate = delegate
         app.run()
@@ -15,6 +27,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     var renderer: Renderer!
     var animationTimer: Timer?
+    var pressedKeys: Set<UInt16> = []
+    var isShiftPressed = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let contentRect = NSRect(x: 0, y: 0, width: 800, height: 800)
@@ -23,15 +37,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                           backing: .buffered,
                           defer: false)
         window.title = "Metal AppKit Beginner"
+        window.acceptsMouseMovedEvents = true
 
 
         // создаём Metal view
-        let metalView = MTKView(frame: contentRect)
+        let metalView = KeyboardView(frame: contentRect)
         guard let device = MTLCreateSystemDefaultDevice() else {
             fatalError("Metal is not supported on this device")
         }
         // cоздаем делегат для mtkView
-        renderer = Renderer(device)
+        renderer = Renderer(device, pressedKeysProvider: { [weak self] in
+            self?.pressedKeys ?? []
+        }, shiftProvider: { [weak self] in
+            self?.isShiftPressed ?? false
+        })
 
         setupRenderer()
         // назначаем device и указываем формат пикселя
@@ -45,9 +64,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         metalView.isPaused = false
         metalView.preferredFramesPerSecond = 120
 
+        metalView.onKeyDown = { [weak self] keyCode in
+            self?.pressedKeys.insert(keyCode)
+            print("Key down: \(keyCode), pressed: \(self?.pressedKeys ?? [])")
+        }
+        
+        metalView.onKeyUp = { [weak self] keyCode in
+            self?.pressedKeys.remove(keyCode)
+            print("Key up: \(keyCode)")
+        }
+        
+        metalView.onMouseMove = { [weak self] deltaX, deltaY in
+            self?.renderer.rotateCamera(yaw: deltaX, pitch: deltaY)
+        }
+        
+        metalView.onFlagsChanged = { [weak self] flags in
+            self?.isShiftPressed = flags.contains(.shift)
+        }
+        
         window.contentView = metalView
 
         window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(metalView)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -56,12 +95,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
    func setupRenderer() {
         let shaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/shaders.metal")
-        renderer.registerLibrary(libraryName: "basic", shaderPath: shaderPath)
+        renderer.registerLibrary(libraryName: "triangle", shaderPath: shaderPath)
         
         // Регистрируем pipeline
         renderer.registerPipeline(
             pipelineName: "coloredTriangle",
-            libraryName: "basic",
+            libraryName: "triangle",
             vertexFunction: "vertex_main",
             fragmentFunction: "fragment_main",
             pixelFormat: .bgra8Unorm_srgb
@@ -71,14 +110,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Добавляем треугольник в сцену
         Task {
             var triangle = Triangle()
-            // triangle.traslate(SIMD3<Float>(0,0,0.5))
+            triangle.scale(0.5)
+            triangle.translate(SIMD3<Float>(0.5,0.0,0.0))
             await renderer.addObject(objectName: "triangle", geometry: triangle, pipelineName: "coloredTriangle")
-            
+            let cube = Cube()
+            await renderer.addObject(objectName: "cube", geometry: cube, pipelineName: "coloredTriangle")
             // Запускаем анимацию в главном потоке
             await MainActor.run {
                 self.animationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [renderer] _ in
                     Task {
                         guard let object = await renderer.getObject(objectName: "triangle") else { return }
+                        object.rotate(0.02, axis: SIMD3<Float>(0, 1, 0))
+                        guard let object = await renderer.getObject(objectName: "cube") else { return }
                         object.rotate(0.02, axis: SIMD3<Float>(0, 1, 0))
                     }
                 }
