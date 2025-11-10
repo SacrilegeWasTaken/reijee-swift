@@ -88,37 +88,47 @@ kernel void raytrace(
     primitive_acceleration_structure accelStructure [[buffer(1)]],
     constant Vertex* vertices [[buffer(2)]],
     constant uint16_t* indices [[buffer(3)]],
+    constant uint& samplesPerPixel [[buffer(4)]],
     uint2 tid [[thread_position_in_grid]]
 ) {
     if (tid.x >= output.get_width() || tid.y >= output.get_height()) {
         return;
     }
     
-    // Generate primary ray
-    float2 uv = (float2(tid) + 0.5) / float2(output.get_width(), output.get_height());
-    uv = uv * 2.0 - 1.0;
-    uv.y = -uv.y;
+    float3 accumulatedColor = float3(0.0);
     
-    float tanHalfFov = tan(camera.fov * 0.5);
-    float3 direction = normalize(
-        camera.forward + 
-        camera.right * uv.x * tanHalfFov * camera.aspect +
-        camera.up * uv.y * tanHalfFov
-    );
-    
-    ray r;
-    r.origin = camera.position;
-    r.direction = direction;
-    r.min_distance = 0.001;
-    r.max_distance = 1000.0;
-    
-    intersector<triangle_data> i;
-    i.assume_geometry_type(geometry_type::triangle);
-    intersection_result<triangle_data> intersection = i.intersect(r, accelStructure);
-    
-    // Sky gradient
-    float3 skyColor = mix(float3(0.5, 0.7, 1.0), float3(0.1, 0.2, 0.4), direction.y * 0.5 + 0.5);
-    float3 color = skyColor;
+    for (uint sample = 0; sample < samplesPerPixel; sample++) {
+        // Jitter для anti-aliasing
+        float2 jitter = float2(
+            random(float2(tid) + float(sample) * 0.1),
+            random(float2(tid) + float(sample) * 0.2)
+        ) - 0.5;
+        
+        // Generate primary ray
+        float2 uv = (float2(tid) + 0.5 + jitter) / float2(output.get_width(), output.get_height());
+        uv = uv * 2.0 - 1.0;
+        uv.y = -uv.y;
+        
+        float tanHalfFov = tan(camera.fov * 0.5);
+        float3 direction = normalize(
+            camera.forward + 
+            camera.right * uv.x * tanHalfFov * camera.aspect +
+            camera.up * uv.y * tanHalfFov
+        );
+        
+        ray r;
+        r.origin = camera.position;
+        r.direction = direction;
+        r.min_distance = 0.001;
+        r.max_distance = 1000.0;
+        
+        intersector<triangle_data> i;
+        i.assume_geometry_type(geometry_type::triangle);
+        intersection_result<triangle_data> intersection = i.intersect(r, accelStructure);
+        
+        // Sky gradient
+        float3 skyColor = mix(float3(0.5, 0.7, 1.0), float3(0.1, 0.2, 0.4), direction.y * 0.5 + 0.5);
+        float3 color = skyColor;
     
     if (intersection.type == intersection_type::triangle) {
         // Get barycentric coordinates
@@ -167,7 +177,14 @@ kernel void raytrace(
         float shadow = traceShadow(shadowRay, accelStructure, length(lightPos - hitPos)) ? 0.3 : 1.0;
         
         // Ambient occlusion
-        float ao = computeAO(hitPos, normal, accelStructure, tid);
+        // Better world-space seed
+        uint2 posSeed = uint2(
+            fract(sin(dot(hitPos.xy, float2(12.9898, 78.233))) * 43758.5453) * 10000.0,
+            fract(sin(dot(hitPos.yz, float2(39.346, 11.135))) * 43758.5453) * 10000.0
+        );
+        float ao = computeAO(hitPos, normal, accelStructure, posSeed);
+
+
         
         // Ambient light
         float3 ambient = float3(0.2, 0.25, 0.3) * ao;
@@ -208,6 +225,10 @@ kernel void raytrace(
         float fogFactor = exp(-intersection.distance * fogDensity);
         color = mix(skyColor, color, fogFactor);
     }
+        
+        accumulatedColor += color;
+    }
     
-    output.write(float4(color, 1.0), tid);
+    accumulatedColor /= float(samplesPerPixel);
+    output.write(float4(accumulatedColor, 1.0), tid);
 }
