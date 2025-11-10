@@ -65,7 +65,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Добавляем треугольник в сцену
         let triangle = Triangle()
-        renderer.addObject(geometry: triangle, pipelineName: "coloredTriangle")
+        renderer.addObject(objectName: "triangle", geometry: triangle, pipelineName: "coloredTriangle")
+        let object = renderer.getObject(objectName: "triangle")!
+        object.traslate(SIMD3<Float>(0.3, 0.1, 0.1))
+        object.rotate(.pi / 2, axis: SIMD3<Float>(SIMD3<Float>(0.0, 0.0, 1.0)))
+        object.scale(0.4)
     }
 
 }

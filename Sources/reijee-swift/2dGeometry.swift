@@ -7,7 +7,7 @@ protocol _2DGeomtry {
 }
 
 protocol _2DMovable {
-    mutating func traslate(_ dxyz: Float)
+    mutating func traslate(_ dxyz: SIMD3<Float>)
     mutating func rotate(_ angle: Float, axis: SIMD3<Float>)
     mutating func scale(_ factor: Float)
 }
@@ -29,16 +29,29 @@ struct Triangle: _2DGeomtry, _2DMovable {
         return _indicies
     }
 
-    mutating func traslate(_ dxyz: Float) {
+    mutating func traslate(_ dxyz: SIMD3<Float>) {
         for index in 0..<_verticies.count {
             _verticies[index].position += dxyz
         }
     }
 
     mutating func rotate(_ angle: Float, axis: SIMD3<Float>) {
-        let normalizedAxis = normalize(axis)
+        // 1. Находим центр объекта
+        var center = SIMD3<Float>(0, 0, 0)
+        for vertex in _verticies {
+            center += vertex.position
+        }
+        center /= Float(_verticies.count)
+        
+        // 2. Сдвигаем к началу координат
+        for i in 0..<_verticies.count {
+            _verticies[i].position -= center
+        }
+        
+        // 3. Вращаем вокруг начала координат
+        let normalizedAxis = simd_normalize(axis)
         let cos = cosf(angle)
-        let sin = cosf(angle)
+        let sin = sinf(angle)  // ИСПРАВЛЕНО: было cosf!
         let oneMinusCos = 1.0 - cos
 
         let x = normalizedAxis.x
@@ -59,6 +72,11 @@ struct Triangle: _2DGeomtry, _2DMovable {
             _verticies[i].position.z = (z * x * oneMinusCos - y * sin) * pos.x +
                                         (z * y * oneMinusCos + x * sin) * pos.y +
                                         (cos + z * z * oneMinusCos) * pos.z
+        }
+        
+        // 4. Сдвигаем обратно
+        for i in 0..<_verticies.count {
+            _verticies[i].position += center
         }
     }
 

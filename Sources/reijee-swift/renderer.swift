@@ -2,11 +2,10 @@ import AppKit
 import MetalKit
 
 class Renderer: NSObject, MTKViewDelegate {
-    let device: MTLDevice 
-    let commandQueue: MTLCommandQueue
-    let shaderLibrary: ShaderLibrary
-    let scene: Scene
-
+    fileprivate let device: MTLDevice 
+    fileprivate let commandQueue: MTLCommandQueue
+    fileprivate let shaderLibrary: ShaderLibrary
+    fileprivate let scene: Scene
 
     init(_ device: MTLDevice) {
         self.device = device
@@ -54,22 +53,7 @@ class Renderer: NSObject, MTKViewDelegate {
         )
     }
 
-    func addObject(geometry: any _2DGeomtry, pipelineName: String) {
-        let vetricies = geometry.vetricies()
-        let buffer = device.makeBuffer(
-            bytes: vetricies,
-            length: vetricies.count * MemoryLayout<Vertex>.stride,
-            options: []
-        )!
 
-        let object = SceneObject(
-            geometry: geometry,
-            pipelineName: pipelineName,
-            vertexBuffer: buffer,
-        )
-
-        scene.addObject(object)
-    }
 
 
     func draw(in view: MTKView) {
@@ -85,17 +69,17 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
 
         for object in scene.getObjects() {
-            guard let pipeline = shaderLibrary.getPipeline(object.pipelineName) else { 
-                print("Pipeline \(object.pipelineName) not found")
+            guard let pipeline = shaderLibrary.getPipeline(object.getPipelineName()) else { 
+                print("Pipeline \(object.getPipelineName()) not found")
                 continue
              }
 
              encoder.setRenderPipelineState(pipeline)
-             encoder.setVertexBuffer(object.vertexBuffer, offset: 0, index: 0)
+             encoder.setVertexBuffer(object.getVertexBuffer(), offset: 0, index: 0)
              encoder.drawPrimitives(
                 type: .triangle,
                 vertexStart: 0,
-                vertexCount: object.geometry.vetricies().count
+                vertexCount: object.vetricies().count
              )
         }
         
@@ -110,5 +94,46 @@ class Renderer: NSObject, MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
 
+    }
+}
+
+
+extension Renderer {
+    func addObject(objectName: String, geometry: any _2DGeomtry & _2DMovable, pipelineName: String) {
+        let vetricies = geometry.vetricies()
+        let buffer = device.makeBuffer(
+            bytes: vetricies,
+            length: vetricies.count * MemoryLayout<Vertex>.stride,
+            options: []
+        )!
+
+        let object = SceneObject(
+            geometry: geometry,
+            pipelineName: pipelineName,
+            vertexBuffer: buffer,
+            device: device
+        )
+
+        scene.addObject(objectName: objectName, object)
+    }
+    
+    func removeObject(at objectName: String) {
+        scene.removeObject(at: objectName)
+    }
+    
+    func getObjects() -> [SceneObject] {
+        return scene.getObjects()
+    }
+    
+    func getAllObjectIDs() -> [String] {
+        return scene.getAllObjectIDs()
+    }
+    
+    func getObject(objectName: String) -> SceneObject? {
+        return scene.getObject(id: objectName)
+    }
+    
+    func clear() {
+        scene.clear()
     }
 }
