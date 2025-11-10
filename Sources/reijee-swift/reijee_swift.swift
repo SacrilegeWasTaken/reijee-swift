@@ -92,8 +92,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
    func setupRenderer() {
-        let shaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/shaders.metal")
-        renderer.registerLibrary(libraryName: "triangle", shaderPath: shaderPath)
+        let triangleShaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/shaders.metal")
+        renderer.registerLibrary(libraryName: "triangle", shaderPath: triangleShaderPath)
+        let gridShaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/grid.metal")
+        renderer.registerLibrary(libraryName: "grid", shaderPath: gridShaderPath)
         
         // Регистрируем pipeline
         renderer.registerPipeline(
@@ -101,6 +103,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             libraryName: "triangle",
             vertexFunction: "vertex_main",
             fragmentFunction: "fragment_main",
+            pixelFormat: .bgra8Unorm_srgb
+        )
+
+        renderer.registerPipeline(
+            pipelineName: "gridUnlimited",
+            libraryName: "grid",
+            vertexFunction: "grid_vertex",
+            fragmentFunction: "grid_fragment",
             pixelFormat: .bgra8Unorm_srgb
         )
         
@@ -113,6 +123,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             await renderer.addObject(objectName: "triangle", geometry: triangle, pipelineName: "coloredTriangle")
             let cube = Cube()
             await renderer.addObject(objectName: "cube", geometry: cube, pipelineName: "coloredTriangle")
+            let plane = Plane()
+            await renderer.addObject(objectName: "plane", geometry: plane, pipelineName: "gridUnlimited")
             // Запускаем анимацию в главном потоке
             await MainActor.run {
                 self.animationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [renderer] _ in

@@ -2,11 +2,6 @@
 #include "common.metal"
 using namespace metal;
 
-struct Vertex {
-    float3 position [[attribute(0)]];
-    float4 color [[attribute(1)]];
-};
-
 struct VertexOut {
     float4 position [[position]];
     float4 color;

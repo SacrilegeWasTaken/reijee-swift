@@ -141,3 +141,26 @@ struct Cube: Geometry, Transformable {
         }
     }
 }
+
+struct Plane: Geometry, Transformable {
+    private var _vertices = [
+        Vertex(position: SIMD3<Float>(-1000, 0, -1000), color: SIMD4<Float>(0.3, 0.3, 0.3, 1)),
+        Vertex(position: SIMD3<Float>( 1000, 0, -1000), color: SIMD4<Float>(0.3, 0.3, 0.3, 1)),
+        Vertex(position: SIMD3<Float>( 1000, 0,  1000), color: SIMD4<Float>(0.3, 0.3, 0.3, 1)),
+        Vertex(position: SIMD3<Float>(-1000, 0,  1000), color: SIMD4<Float>(0.3, 0.3, 0.3, 1))
+    ]
+    
+    private let _indices: [UInt16] = [0, 1, 2, 0, 2, 3]
+    
+    func vertices() -> [Vertex] { _vertices }
+    func indices() -> [UInt16] { _indices }
+    
+    mutating func translate(_ delta: SIMD3<Float>) {
+        for i in 0..<_vertices.count {
+            _vertices[i].position += delta
+        }
+    }
+    
+    mutating func rotate(_ angle: Float, axis: SIMD3<Float>) {}
+    mutating func scale(_ factor: Float) {}
+}
