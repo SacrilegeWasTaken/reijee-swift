@@ -15,15 +15,45 @@ extension Renderer {
             return
         }
         
+        // Combine all vertices and indices into single buffers
+        var allVertices: [Vertex] = []
+        var allIndices: [UInt16] = []
+        var indexOffset: UInt16 = 0
+        
         let geometries = objects.map { object -> MTLAccelerationStructureTriangleGeometryDescriptor in
+            let vertices = object.vertices()
+            let indices = object.indices()
+            
+            // Add vertices
+            allVertices.append(contentsOf: vertices)
+            
+            // Add indices with offset
+            let offsetIndices = indices.map { $0 + indexOffset }
+            allIndices.append(contentsOf: offsetIndices)
+            indexOffset += UInt16(vertices.count)
+            
+            // Create geometry descriptor
             let descriptor = MTLAccelerationStructureTriangleGeometryDescriptor()
             descriptor.vertexBuffer = object.getVertexBuffer()
             descriptor.vertexStride = MemoryLayout<Vertex>.stride
             descriptor.indexBuffer = object.getIndexBuffer()
             descriptor.indexType = .uint16
-            descriptor.triangleCount = object.indices().count / 3
+            descriptor.triangleCount = indices.count / 3
             return descriptor
         }
+        
+        // Create combined buffers
+        combinedVertexBuffer = device.makeBuffer(
+            bytes: allVertices,
+            length: allVertices.count * MemoryLayout<Vertex>.stride,
+            options: []
+        )
+        
+        combinedIndexBuffer = device.makeBuffer(
+            bytes: allIndices,
+            length: allIndices.count * MemoryLayout<UInt16>.stride,
+            options: []
+        )
         
         let accelDescriptor = MTLPrimitiveAccelerationStructureDescriptor()
         accelDescriptor.geometryDescriptors = geometries
@@ -115,10 +145,21 @@ extension Renderer {
             return 
         }
         
+        guard let vertexBuffer = combinedVertexBuffer else {
+            print("No vertex buffer")
+            return
+        }
+        guard let indexBuffer = combinedIndexBuffer else {
+            print("No index buffer")
+            return
+        }
+        
         computeEncoder.setComputePipelineState(computePipeline)
         computeEncoder.setTexture(outputTexture, index: 0)
         computeEncoder.setBytes(&cameraData, length: MemoryLayout<CameraData>.stride, index: 0)
         computeEncoder.setAccelerationStructure(accelStructure, bufferIndex: 1)
+        computeEncoder.setBuffer(vertexBuffer, offset: 0, index: 2)
+        computeEncoder.setBuffer(indexBuffer, offset: 0, index: 3)
         
         let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
         let threadgroups = MTLSize(
@@ -230,6 +271,8 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
 
     // Raytrace
     private var accelerationStructure: MTLAccelerationStructure?
+    private var combinedVertexBuffer: MTLBuffer?
+    private var combinedIndexBuffer: MTLBuffer?
 
     init(_ device: MTLDevice, pressedKeysProvider: @escaping () -> Set<UInt16>, shiftProvider: @escaping () -> Bool) {
         self.device = device
