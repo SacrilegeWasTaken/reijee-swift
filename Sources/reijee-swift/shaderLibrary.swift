@@ -5,6 +5,7 @@ class ShaderLibrary {
     private let device: MTLDevice
     private var libraries: [String: MTLLibrary] = [:]
     private var pipelines: [String: MTLRenderPipelineState] = [:]
+    private var computePipelines: [String: MTLComputePipelineState] = [:]
     
     init(device: MTLDevice) {
         self.device = device
@@ -54,5 +55,16 @@ class ShaderLibrary {
     
     func getPipeline(_ name: String) -> MTLRenderPipelineState? {
         return pipelines[name]
+    }
+    
+    // Create compute pipeline
+    func createComputePipeline(name: String, libraryName: String, kernelFunction: String) {
+        guard let library = libraries[libraryName] else { return }
+        guard let function = library.makeFunction(name: kernelFunction) else { return }
+        computePipelines[name] = try! device.makeComputePipelineState(function: function)
+    }
+    
+    func getComputePipeline(_ name: String) -> MTLComputePipelineState? {
+        return computePipelines[name]
     }
 }

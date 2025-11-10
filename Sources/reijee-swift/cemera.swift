@@ -68,4 +68,28 @@ class Camera: @unchecked Sendable {
             [0, 0, z * near, 0]
         )
     }
+    
+    // Raytracing support
+    func getCameraData(fov: Float, aspect: Float) -> CameraData {
+        lock.read { state in
+            let forward = simd_normalize(SIMD3<Float>(
+                cos(state.pitch) * sin(state.yaw),
+                sin(state.pitch),
+                cos(state.pitch) * cos(state.yaw)
+            ))
+            
+            let worldUp = SIMD3<Float>(0, 1, 0)
+            let right = simd_normalize(simd_cross(forward, worldUp))
+            let up = simd_normalize(simd_cross(right, forward))
+            
+            return CameraData(
+                position: state.position,
+                forward: forward,
+                right: right,
+                up: up,
+                fov: fov,
+                aspect: aspect
+            )
+        }
+    }
 }

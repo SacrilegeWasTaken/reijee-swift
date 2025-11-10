@@ -97,6 +97,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         renderer.registerLibrary(libraryName: "triangle", shaderPath: triangleShaderPath)
         let gridShaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/grid.metal")
         renderer.registerLibrary(libraryName: "grid", shaderPath: gridShaderPath)
+        let raytracingShaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/raytracing.metal")
+        renderer.registerLibrary(libraryName: "raytracing", shaderPath: raytracingShaderPath)
         
         // Регистрируем pipeline
         renderer.registerPipeline(
@@ -115,6 +117,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             pixelFormat: .bgra8Unorm_srgb
         )
         
+        // Регистрируем compute pipeline для raytracing
+        renderer.registerComputePipeline(
+            pipelineName: "raytracing",
+            libraryName: "raytracing",
+            kernelFunction: "raytrace"
+        )
+        
         let renderer = self.renderer!
         // Добавляем треугольник в сцену
         Task {
@@ -122,7 +131,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             triangle.translate(SIMD3<Float>(1.5,0.0,0.0))
             await renderer.addObject(objectName: "triangle", geometry: triangle, pipelineName: "coloredTriangle")
             let cube = Cube()
+            var cube2 = Cube()
+            cube2.translate(SIMD3<Float>(-3,0.0,0.0))
             await renderer.addObject(objectName: "cube", geometry: cube, pipelineName: "coloredTriangle")
+            await renderer.addObject(objectName: "cube2", geometry: cube2, pipelineName: "coloredTriangle")
             let grid = Grid()
             await renderer.addObject(objectName: "grid", geometry: grid, pipelineName: "gridUnlimited")
             // Запускаем анимацию в главном потоке
