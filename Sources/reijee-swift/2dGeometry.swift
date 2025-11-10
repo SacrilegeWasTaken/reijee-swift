@@ -19,7 +19,8 @@ struct Triangle: _2DGeometry, _2DMovable {
         Vertex(position: SIMD3<Float>(-0.5, -0.5, 0.0), color: SIMD4<Float>(0, 1, 0, 1)), // лево-низ
         Vertex(position: SIMD3<Float>(0.5, -0.5, 0.0), color: SIMD4<Float>(0, 0, 1, 1))   // право-низ
     ]
-    private let _indicies: [UInt16] = [0, 1, 2]
+    private let _indicies: [UInt16] = [ 0, 1, 2,    // CCW - conter clock-wise для вида впереди
+                                        0, 2, 1 ]   // CW - clock-wise для вида сзади
 
     func vetricies() -> [Vertex] {
         return _verticies

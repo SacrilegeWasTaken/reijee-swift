@@ -6,27 +6,25 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     fileprivate let commandQueue: MTLCommandQueue
     fileprivate let shaderLibrary: ShaderLibrary
     fileprivate let scene: Scene
+    fileprivate let depthStencilState: MTLDepthStencilState
+    fileprivate let camera: Camera
+
 
     init(_ device: MTLDevice) {
         self.device = device
         self.commandQueue = device.makeCommandQueue()!
         self.scene = Scene()
-
-        let shaderPath = #filePath.replacingOccurrences(of: "renderer.swift", with: "shaders.metal")
+        self.camera = Camera()
         self.shaderLibrary = ShaderLibrary(device: device)
-        self.shaderLibrary.loadLibrary(name: "triangle", path: shaderPath)
-        
-        // Регистрируем pipeline
-        shaderLibrary.createPipeline(
-            name: "triangle",
-            libraryName: "triangle",
-            vertexFunction: "vertex_main",
-            fragmentFunction: "fragment_main",
-            pixelFormat: .bgra8Unorm_srgb
-        )
+
+        let depthDescriptor = MTLDepthStencilDescriptor()
+        depthDescriptor.depthCompareFunction = .less
+        depthDescriptor.isDepthWriteEnabled = true
+        self.depthStencilState = device.makeDepthStencilState(descriptor: depthDescriptor)!
 
         super.init()
     }
+
 
 
     func registerLibrary(
@@ -61,12 +59,19 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
         guard let descriptor = view.currentRenderPassDescriptor else { return }
 
         descriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0)
+        descriptor.depthAttachment.loadAction = .clear
+        descriptor.depthAttachment.clearDepth = 1.0
     
         // создаём командный буфер
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
         // создаем рендер энкодер
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
+        let aspect = Float(view.drawableSize.width / view.drawableSize.height)
+        var uniforms = Uniforms(
+            projectionMatrix: camera.projectionMatrix(fov: .pi / 3, aspect: aspect, near: 0.1, far: 100),
+            viewMatrix: camera.viewMatrix()
+        )
 
         for object in scene.getObjectsForRendering() {
             guard let pipeline = shaderLibrary.getPipeline(object.getPipelineName()) else { 
@@ -74,13 +79,17 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
                 continue
              }
 
-             encoder.setRenderPipelineState(pipeline)
-             encoder.setVertexBuffer(object.getVertexBuffer(), offset: 0, index: 0)
-             encoder.drawPrimitives(
-                type: .triangle,
-                vertexStart: 0,
-                vertexCount: object.vetricies().count
-             )
+            encoder.setRenderPipelineState(pipeline)
+            encoder.setVertexBuffer(object.getVertexBuffer(), offset: 0, index: 0)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            encoder.setDepthStencilState(depthStencilState)
+            encoder.drawIndexedPrimitives(
+                type: .triangle, 
+                indexCount: object.indicies().count, 
+                indexType: .uint16, 
+                indexBuffer: object.getIndexBuffer(), 
+                indexBufferOffset: 0
+            )     
         }
         
 
@@ -101,16 +110,26 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
 extension Renderer {
     func addObject(objectName: String, geometry: any _2DGeometry & _2DMovable, pipelineName: String) async {
         let vetricies = geometry.vetricies()
-        let buffer = device.makeBuffer(
+        let indicies = geometry.indicies()
+        let vertexBuffer = device.makeBuffer(
             bytes: vetricies,
             length: vetricies.count * MemoryLayout<Vertex>.stride,
             options: []
         )!
 
+        let indexBuffer = device.makeBuffer(
+            bytes: indicies,
+            length: indicies.count * MemoryLayout<UInt16>.stride,
+            options: []
+        )!
+
+        
+
         let object = SceneObject(
             geometry: geometry,
             pipelineName: pipelineName,
-            vertexBuffer: buffer,
+            vertexBuffer: vertexBuffer,
+            indexBuffer: indexBuffer,
             device: device
         )
 

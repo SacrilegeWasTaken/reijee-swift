@@ -36,11 +36,14 @@ class SceneObject: @unchecked Sendable {
     private let device: MTLDevice
     private var vertexBuffers: [MTLBuffer]
 
+    private var indexBuffers: MTLBuffer
 
-    init(geometry: any _2DGeometry & _2DMovable, pipelineName: String, vertexBuffer: MTLBuffer, device: MTLDevice) {
+
+    init(geometry: any _2DGeometry & _2DMovable, pipelineName: String, vertexBuffer: MTLBuffer, indexBuffer: MTLBuffer, device: MTLDevice) {
         self.geometry = RwLock(geometry)
         self.pipelineName = pipelineName
         self.vertexBuffers = [vertexBuffer, vertexBuffer]
+        self.indexBuffers = indexBuffer
         self.device = device
     }
 
@@ -64,6 +67,10 @@ class SceneObject: @unchecked Sendable {
 
     func getPipelineName() -> String {
         return pipelineName
+    }
+
+    func getIndexBuffer() -> MTLBuffer {
+        return indexBuffers
     }
 }
 

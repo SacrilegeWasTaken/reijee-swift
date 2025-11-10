@@ -17,7 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var animationTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let contentRect = NSRect(x: 0, y: 0, width: 1280, height: 800)
+        let contentRect = NSRect(x: 0, y: 0, width: 800, height: 800)
         window = NSWindow(contentRect: contentRect,
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered,
@@ -40,6 +40,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // назначаем делегат для отрисовки (должен наследоваться протокол MTKViewDelegate)
         metalView.delegate = renderer
         metalView.enableSetNeedsDisplay = false
+        metalView.clearDepth = 1.0
+        metalView.depthStencilPixelFormat = .depth32Float
         metalView.isPaused = false
         metalView.preferredFramesPerSecond = 120
 
@@ -53,7 +55,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
    func setupRenderer() {
-        let shaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders.metal")
+        let shaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/shaders.metal")
         renderer.registerLibrary(libraryName: "basic", shaderPath: shaderPath)
         
         // Регистрируем pipeline
@@ -68,7 +70,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let renderer = self.renderer!
         // Добавляем треугольник в сцену
         Task {
-            let triangle = Triangle()
+            var triangle = Triangle()
+            // triangle.traslate(SIMD3<Float>(0,0,0.5))
             await renderer.addObject(objectName: "triangle", geometry: triangle, pipelineName: "coloredTriangle")
             
             // Запускаем анимацию в главном потоке
@@ -76,7 +79,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.animationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [renderer] _ in
                     Task {
                         guard let object = await renderer.getObject(objectName: "triangle") else { return }
-                        object.rotate(0.02, axis: SIMD3<Float>(0, 0, 1))
+                        object.rotate(0.02, axis: SIMD3<Float>(0, 1, 0))
                     }
                 }
             }
