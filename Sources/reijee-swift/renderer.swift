@@ -6,6 +6,53 @@ enum RenderMode {
     case raytracing
 }
 
+// Raytracing
+extension Renderer {
+    private func buildAccelerationStructure() {
+        let geometries = scene.getObjectsForRendering().map { object -> MTLAccelerationStructureTriangleGeometryDescriptor in
+            let descriptor = MTLAccelerationStructureTriangleGeometryDescriptor()
+            descriptor.vertexBuffer = object.getVertexBuffer()
+            descriptor.vertexStride = MemoryLayout<Vertex>.stride
+            descriptor.indexBuffer = object.getIndexBuffer()
+            descriptor.indexType = .uint16
+            descriptor.triangleCount = object.indices().count / 3
+            return descriptor
+        }
+        
+        let accelDescriptor = MTLPrimitiveAccelerationStructureDescriptor()
+        accelDescriptor.geometryDescriptors = geometries
+        
+        let sizes = device.accelerationStructureSizes(descriptor: accelDescriptor)
+        let accelStructure = device.makeAccelerationStructure(size: sizes.accelerationStructureSize)!
+        
+        let scratchBuffer = device.makeBuffer(length: sizes.buildScratchBufferSize, options: .storageModePrivate)!
+        
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+        guard let encoder = commandBuffer.makeAccelerationStructureCommandEncoder() else { return }
+        
+        encoder.build(accelerationStructure: accelStructure, descriptor: accelDescriptor, scratchBuffer: scratchBuffer, scratchBufferOffset: 0)
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        
+        self.accelerationStructure = accelStructure
+    }
+
+    func drawRaytracing(in view: MTKView, drawable: MTLDrawable, descriptor: MTLRenderPassDescriptor) {
+        if accelerationStructure == nil {
+            buildAccelerationStructure()
+        }   
+
+        descriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.1, 0.1, 0.2, 1.0)
+        
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
+        encoder.endEncoding()
+        commandBuffer.present(drawable)
+        commandBuffer.commit()
+    }
+}
+
 class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     fileprivate let device: MTLDevice 
     fileprivate let commandQueue: MTLCommandQueue
@@ -21,6 +68,9 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     private var renderMode = RwLock<RenderMode>(.rasterization)
     private var wasMPressed = false
 
+    // Raytrace
+    private var accelerationStructure: MTLAccelerationStructure?
+
     init(_ device: MTLDevice, pressedKeysProvider: @escaping () -> Set<UInt16>, shiftProvider: @escaping () -> Bool) {
         self.device = device
         self.commandQueue = device.makeCommandQueue()!
@@ -34,17 +84,8 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
         depthDescriptor.depthCompareFunction = .less
         depthDescriptor.isDepthWriteEnabled = true
         self.depthStencilState = device.makeDepthStencilState(descriptor: depthDescriptor)!
-
         super.init()
     }
-    
-    
-    func toggleRenderMode() {
-        renderMode.write { mode in
-            mode = mode == .rasterization ? .raytracing : .rasterization
-        }
-    }
-
 
     func registerLibrary(
         libraryName: String,
@@ -87,72 +128,31 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     }
 
 
-    func drawRaytracing(in view: MTKView, drawable: MTLDrawable, descriptor: MTLRenderPassDescriptor) {
-
-        descriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.1, 0.1, 0.2, 1.0)
-        
-        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
-        encoder.endEncoding()
-        commandBuffer.present(drawable)
-        commandBuffer.commit()
-    }
-
-    
-    func drawRasterization(in view: MTKView, drawable: MTLDrawable, descriptor: MTLRenderPassDescriptor) {
-
-        descriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0)
-        descriptor.depthAttachment.loadAction = .clear
-        descriptor.depthAttachment.clearDepth = 1.0
-    
-        // создаём командный буфер
-        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
-
-        // создаем рендер энкодер
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
-        let aspect = Float(descriptor.colorAttachments[0].texture!.width) / Float(descriptor.colorAttachments[0].texture!.height)
-        var uniforms = Uniforms(
-            projectionMatrix: camera.projectionMatrix(fov: .pi / 3, aspect: aspect, near: 0.1, far: 100),
-            viewMatrix: camera.viewMatrix()
-        )
-
-        for object in scene.getObjectsForRendering() {
-            guard let pipeline = shaderLibrary.getPipeline(object.getPipelineName()) else { 
-                print("Pipeline \(object.getPipelineName()) not found")
-                continue
-             }
-
-            encoder.setRenderPipelineState(pipeline)
-            encoder.setVertexBuffer(object.getVertexBuffer(), offset: 0, index: 0)
-            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-            encoder.setDepthStencilState(depthStencilState)
-            encoder.drawIndexedPrimitives(
-                type: .triangle, 
-                indexCount: object.indices().count, 
-                indexType: .uint16, 
-                indexBuffer: object.getIndexBuffer(), 
-                indexBufferOffset: 0
-            )     
-        }
-        
-
-        encoder.endEncoding()
-
-        // отображаем результат
-        commandBuffer.present(drawable)
-        commandBuffer.commit()
-    }
-
-
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
 
     }
+}
 
-    func rotateCamera(yaw: Float, pitch: Float) {
-        camera.rotate(yaw: yaw, pitch: pitch)
+// Render mode switching
+extension Renderer {
+    func toggleRenderMode() {
+        renderMode.write { mode in
+            mode = mode == .rasterization ? .raytracing : .rasterization
+        }
     }
-    
 
+    private func updateInput() {
+        let pressedKeys = pressedKeysProvider()
+        let isMPressed = pressedKeys.contains(46) // M
+        if isMPressed && !wasMPressed {
+            toggleRenderMode()
+        }
+        wasMPressed = isMPressed
+    }
+}
+
+// Movement and camera
+extension Renderer {
     private func updateCamera() {
         let pressedKeys = pressedKeysProvider()
         let acceleration: Float = 0.008
@@ -178,17 +178,12 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
         if pressedKeys.contains(125) { camera.rotate(yaw: 0, pitch: -0.02) } // Down arrow
     }
 
-    private func updateInput() {
-        let pressedKeys = pressedKeysProvider()
-        let isMPressed = pressedKeys.contains(46) // M
-        if isMPressed && !wasMPressed {
-            toggleRenderMode()
-        }
-        wasMPressed = isMPressed
+    func rotateCamera(yaw: Float, pitch: Float) {
+        camera.rotate(yaw: yaw, pitch: pitch)
     }
 }
 
-
+// OBJECT CONTROLS
 extension Renderer {
     func addObject(objectName: String, geometry: any Geometry & Transformable, pipelineName: String) async {
         let vetricies = geometry.vertices()
@@ -236,5 +231,52 @@ extension Renderer {
     
     func clear() async {
         await scene.clear()
+    }
+}
+
+// Rasterization render mode
+extension Renderer {
+    func drawRasterization(in view: MTKView, drawable: MTLDrawable, descriptor: MTLRenderPassDescriptor) {
+
+        descriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0)
+        descriptor.depthAttachment.loadAction = .clear
+        descriptor.depthAttachment.clearDepth = 1.0
+    
+        // создаём командный буфер
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+
+        // создаем рендер энкодер
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
+        let aspect = Float(descriptor.colorAttachments[0].texture!.width) / Float(descriptor.colorAttachments[0].texture!.height)
+        var uniforms = Uniforms(
+            projectionMatrix: camera.projectionMatrix(fov: .pi / 3, aspect: aspect, near: 0.1, far: 100),
+            viewMatrix: camera.viewMatrix()
+        )
+
+        for object in scene.getObjectsForRendering() {
+            guard let pipeline = shaderLibrary.getPipeline(object.getPipelineName()) else { 
+                print("Pipeline \(object.getPipelineName()) not found")
+                continue
+             }
+
+            encoder.setRenderPipelineState(pipeline)
+            encoder.setVertexBuffer(object.getVertexBuffer(), offset: 0, index: 0)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+            encoder.setDepthStencilState(depthStencilState)
+            encoder.drawIndexedPrimitives(
+                type: .triangle, 
+                indexCount: object.indices().count, 
+                indexType: .uint16, 
+                indexBuffer: object.getIndexBuffer(), 
+                indexBufferOffset: 0
+            )     
+        }
+        
+
+        encoder.endEncoding()
+
+        // отображаем результат
+        commandBuffer.present(drawable)
+        commandBuffer.commit()
     }
 }
