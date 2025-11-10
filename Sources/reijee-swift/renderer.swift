@@ -1,5 +1,10 @@
 import AppKit
-import MetalKit
+@preconcurrency import MetalKit
+
+enum RenderMode {
+    case rasterization
+    case raytracing
+}
 
 class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     fileprivate let device: MTLDevice 
@@ -8,10 +13,13 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     fileprivate let scene: Scene
     fileprivate let depthStencilState: MTLDepthStencilState
     fileprivate let camera: Camera
+
     private let pressedKeysProvider: () -> Set<UInt16>
     private let shiftProvider: () -> Bool
-    private var velocity = SIMD3<Float>(0, 0, 0)
+    private var cameraVelocity = SIMD3<Float>(0, 0, 0)
 
+    private var renderMode = RwLock<RenderMode>(.rasterization)
+    private var wasMPressed = false
 
     init(_ device: MTLDevice, pressedKeysProvider: @escaping () -> Set<UInt16>, shiftProvider: @escaping () -> Bool) {
         self.device = device
@@ -29,7 +37,13 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
 
         super.init()
     }
-
+    
+    
+    func toggleRenderMode() {
+        renderMode.write { mode in
+            mode = mode == .rasterization ? .raytracing : .rasterization
+        }
+    }
 
 
     func registerLibrary(
@@ -57,12 +71,35 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     }
 
 
-
-
     func draw(in view: MTKView) {
         updateCamera()
+        updateInput()
         guard let drawable = view.currentDrawable else { return }
         guard let descriptor = view.currentRenderPassDescriptor else { return }
+        let mode = renderMode.read { $0 }
+        
+        switch mode {
+        case .rasterization:
+            drawRasterization(in: view, drawable: drawable, descriptor: descriptor)
+        case .raytracing:
+            drawRaytracing(in: view, drawable: drawable, descriptor: descriptor)
+        }
+    }
+
+
+    func drawRaytracing(in view: MTKView, drawable: MTLDrawable, descriptor: MTLRenderPassDescriptor) {
+
+        descriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.1, 0.1, 0.2, 1.0)
+        
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
+        encoder.endEncoding()
+        commandBuffer.present(drawable)
+        commandBuffer.commit()
+    }
+
+    
+    func drawRasterization(in view: MTKView, drawable: MTLDrawable, descriptor: MTLRenderPassDescriptor) {
 
         descriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 1.0)
         descriptor.depthAttachment.loadAction = .clear
@@ -73,7 +110,7 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
 
         // создаем рендер энкодер
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
-        let aspect = Float(view.drawableSize.width / view.drawableSize.height)
+        let aspect = Float(descriptor.colorAttachments[0].texture!.width) / Float(descriptor.colorAttachments[0].texture!.height)
         var uniforms = Uniforms(
             projectionMatrix: camera.projectionMatrix(fov: .pi / 3, aspect: aspect, near: 0.1, far: 100),
             viewMatrix: camera.viewMatrix()
@@ -115,6 +152,7 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
         camera.rotate(yaw: yaw, pitch: pitch)
     }
     
+
     private func updateCamera() {
         let pressedKeys = pressedKeysProvider()
         let acceleration: Float = 0.008
@@ -128,16 +166,25 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
         if pressedKeys.contains(49) { targetVelocity.y += 1 } // Space
         if shiftProvider() { targetVelocity.y -= 1 } // Shift
         
-        velocity = velocity * damping + targetVelocity * acceleration
+        cameraVelocity = cameraVelocity * damping + targetVelocity * acceleration
         
-        if simd_length(velocity) > 0.001 {
-            camera.move(velocity)
+        if simd_length(cameraVelocity) > 0.001 {
+            camera.move(cameraVelocity)
         }
 
         if pressedKeys.contains(123) { camera.rotate(yaw: -0.02, pitch: 0) } // Left arrow
         if pressedKeys.contains(124) { camera.rotate(yaw: 0.02, pitch: 0) }  // Right arrow
         if pressedKeys.contains(126) { camera.rotate(yaw: 0, pitch: 0.02) }  // Up arrow
         if pressedKeys.contains(125) { camera.rotate(yaw: 0, pitch: -0.02) } // Down arrow
+    }
+
+    private func updateInput() {
+        let pressedKeys = pressedKeysProvider()
+        let isMPressed = pressedKeys.contains(46) // M
+        if isMPressed && !wasMPressed {
+            toggleRenderMode()
+        }
+        wasMPressed = isMPressed
     }
 }
 
