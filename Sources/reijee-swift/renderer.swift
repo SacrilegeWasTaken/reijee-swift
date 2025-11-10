@@ -1,7 +1,7 @@
 import AppKit
 import MetalKit
 
-class Renderer: NSObject, MTKViewDelegate {
+class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     fileprivate let device: MTLDevice 
     fileprivate let commandQueue: MTLCommandQueue
     fileprivate let shaderLibrary: ShaderLibrary
@@ -68,7 +68,7 @@ class Renderer: NSObject, MTKViewDelegate {
         // создаем рендер энкодер
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
 
-        for object in scene.getObjects() {
+        for object in scene.getObjectsForRendering() {
             guard let pipeline = shaderLibrary.getPipeline(object.getPipelineName()) else { 
                 print("Pipeline \(object.getPipelineName()) not found")
                 continue
@@ -99,7 +99,7 @@ class Renderer: NSObject, MTKViewDelegate {
 
 
 extension Renderer {
-    func addObject(objectName: String, geometry: any _2DGeomtry & _2DMovable, pipelineName: String) {
+    func addObject(objectName: String, geometry: any _2DGeometry & _2DMovable, pipelineName: String) async {
         let vetricies = geometry.vetricies()
         let buffer = device.makeBuffer(
             bytes: vetricies,
@@ -114,26 +114,26 @@ extension Renderer {
             device: device
         )
 
-        scene.addObject(objectName: objectName, object)
+        await scene.addObject(objectName: objectName, object)
     }
     
-    func removeObject(at objectName: String) {
-        scene.removeObject(at: objectName)
+    func removeObject(at objectName: String) async {
+       await scene.removeObject(at: objectName)
     }
     
-    func getObjects() -> [SceneObject] {
-        return scene.getObjects()
+    func getObjects() async -> [SceneObject] {
+        return await scene.getObjects()
     }
     
-    func getAllObjectIDs() -> [String] {
-        return scene.getAllObjectIDs()
+    func getAllObjectIDs() async -> [String]  {
+        return await scene.getAllObjectIDs()
     }
     
-    func getObject(objectName: String) -> SceneObject? {
-        return scene.getObject(id: objectName)
+    func getObject(objectName: String) async -> SceneObject? {
+        return await scene.getObject(id: objectName)
     }
     
-    func clear() {
-        scene.clear()
+    func clear() async {
+        await scene.clear()
     }
 }

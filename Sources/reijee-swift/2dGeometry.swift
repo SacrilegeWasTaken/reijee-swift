@@ -1,7 +1,7 @@
 import Foundation
 import simd
 
-protocol _2DGeomtry {
+protocol _2DGeometry {
     func vetricies() -> [Vertex]
     func indicies() -> [UInt16]
 }
@@ -12,7 +12,7 @@ protocol _2DMovable {
     mutating func scale(_ factor: Float)
 }
 
-struct Triangle: _2DGeomtry, _2DMovable {
+struct Triangle: _2DGeometry, _2DMovable {
 
     private var _verticies = [
         Vertex(position: SIMD3<Float>(0.0, 0.5, 0.0), color: SIMD4<Float>(1, 0, 0, 1)),   // верх

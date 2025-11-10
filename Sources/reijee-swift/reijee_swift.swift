@@ -3,6 +3,7 @@ import MetalKit
 
 
 @main
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     static func main() {
         let app = NSApplication.shared
@@ -13,6 +14,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     var window: NSWindow!
     var renderer: Renderer!
+    var animationTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let contentRect = NSRect(x: 0, y: 0, width: 1280, height: 800)
@@ -50,7 +52,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    func setupRenderer() {
+   func setupRenderer() {
         let shaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders.metal")
         renderer.registerLibrary(libraryName: "basic", shaderPath: shaderPath)
         
@@ -63,13 +65,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             pixelFormat: .bgra8Unorm_srgb
         )
         
+        let renderer = self.renderer!
         // Добавляем треугольник в сцену
-        let triangle = Triangle()
-        renderer.addObject(objectName: "triangle", geometry: triangle, pipelineName: "coloredTriangle")
-        let object = renderer.getObject(objectName: "triangle")!
-        object.traslate(SIMD3<Float>(0.3, 0.1, 0.1))
-        object.rotate(.pi / 2, axis: SIMD3<Float>(SIMD3<Float>(0.0, 0.0, 1.0)))
-        object.scale(0.4)
+        Task {
+            let triangle = Triangle()
+            await renderer.addObject(objectName: "triangle", geometry: triangle, pipelineName: "coloredTriangle")
+            
+            // Запускаем анимацию в главном потоке
+            await MainActor.run {
+                self.animationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [renderer] _ in
+                    Task {
+                        guard let object = await renderer.getObject(objectName: "triangle") else { return }
+                        object.rotate(0.02, axis: SIMD3<Float>(0, 0, 1))
+                    }
+                }
+            }
+        }
     }
+
 
 }
