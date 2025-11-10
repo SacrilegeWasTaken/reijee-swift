@@ -15,9 +15,9 @@ protocol Transformable {
 struct Triangle: Geometry, Transformable {
 
     private var _verticies = [
-        Vertex(position: SIMD3<Float>(0.0, 0.5, 0.0), color: SIMD4<Float>(1, 0, 0, 1)),   // верх
-        Vertex(position: SIMD3<Float>(-0.5, -0.5, 0.0), color: SIMD4<Float>(0, 1, 0, 1)), // лево-низ
-        Vertex(position: SIMD3<Float>(0.5, -0.5, 0.0), color: SIMD4<Float>(0, 0, 1, 1))   // право-низ
+        Vertex(position: SIMD3<Float>(0.0, 1, 0.0), color: SIMD4<Float>(1, 0, 0, 1)),   // верх
+        Vertex(position: SIMD3<Float>(-0.5, 0, 0.0), color: SIMD4<Float>(0, 1, 0, 1)), // лево-низ
+        Vertex(position: SIMD3<Float>(0.5, 0, 0.0), color: SIMD4<Float>(0, 0, 1, 1))   // право-низ
     ]
     private let _indicies: [UInt16] = [ 0, 1, 2,    // CCW - conter clock-wise для вида впереди
                                         0, 2, 1 ]   // CW - clock-wise для вида сзади
@@ -92,15 +92,15 @@ struct Cube: Geometry, Transformable {
 
     private var _vertices = [
         // Front face (red)
-        Vertex(position: SIMD3<Float>(-0.5, -0.5,  0.5), color: SIMD4<Float>(1, 0, 0, 1)),
-        Vertex(position: SIMD3<Float>( 0.5, -0.5,  0.5), color: SIMD4<Float>(1, 0, 0, 1)),
-        Vertex(position: SIMD3<Float>( 0.5,  0.5,  0.5), color: SIMD4<Float>(1, 0, 0, 1)),
-        Vertex(position: SIMD3<Float>(-0.5,  0.5,  0.5), color: SIMD4<Float>(1, 0, 0, 1)),
+        Vertex(position: SIMD3<Float>(-0.5, 0,  0.5), color: SIMD4<Float>(1, 0, 0, 1)),
+        Vertex(position: SIMD3<Float>( 0.5, 0,  0.5), color: SIMD4<Float>(1, 0, 0, 1)),
+        Vertex(position: SIMD3<Float>( 0.5, 1,  0.5), color: SIMD4<Float>(1, 0, 0, 1)),
+        Vertex(position: SIMD3<Float>(-0.5, 1,  0.5), color: SIMD4<Float>(1, 0, 0, 1)),
         // Back face (green)
-        Vertex(position: SIMD3<Float>(-0.5, -0.5, -0.5), color: SIMD4<Float>(0, 1, 0, 1)),
-        Vertex(position: SIMD3<Float>( 0.5, -0.5, -0.5), color: SIMD4<Float>(0, 1, 0, 1)),
-        Vertex(position: SIMD3<Float>( 0.5,  0.5, -0.5), color: SIMD4<Float>(0, 1, 0, 1)),
-        Vertex(position: SIMD3<Float>(-0.5,  0.5, -0.5), color: SIMD4<Float>(0, 1, 0, 1))
+        Vertex(position: SIMD3<Float>(-0.5, 0, -0.5), color: SIMD4<Float>(0, 1, 0, 1)),
+        Vertex(position: SIMD3<Float>( 0.5, 0, -0.5), color: SIMD4<Float>(0, 1, 0, 1)),
+        Vertex(position: SIMD3<Float>( 0.5, 1, -0.5), color: SIMD4<Float>(0, 1, 0, 1)),
+        Vertex(position: SIMD3<Float>(-0.5, 1, -0.5), color: SIMD4<Float>(0, 1, 0, 1))
     ]
     
     private let _indices: [UInt16] = [

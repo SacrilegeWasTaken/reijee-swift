@@ -60,6 +60,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         metalView.delegate = renderer
         metalView.enableSetNeedsDisplay = false
         metalView.clearDepth = 1.0
+        metalView.sampleCount = 4 // MSAA 4x
         metalView.depthStencilPixelFormat = .depth32Float
         metalView.isPaused = false
         metalView.preferredFramesPerSecond = 120
@@ -118,7 +119,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Добавляем треугольник в сцену
         Task {
             var triangle = Triangle()
-            triangle.scale(0.5)
             triangle.translate(SIMD3<Float>(1.5,0.0,0.0))
             await renderer.addObject(objectName: "triangle", geometry: triangle, pipelineName: "coloredTriangle")
             let cube = Cube()

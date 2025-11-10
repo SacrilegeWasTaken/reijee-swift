@@ -4,7 +4,7 @@ class Camera: @unchecked Sendable {
     private let lock = RwLock<CameraState>(CameraState())
     
     private struct CameraState {
-        var position: SIMD3<Float> = [0, 0, 5]
+        var position: SIMD3<Float> = [0, 1, 5]
         var yaw: Float = Float.pi
         var pitch: Float = 0
     }
