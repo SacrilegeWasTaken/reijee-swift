@@ -36,7 +36,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered,
                           defer: false)
-        window.title = "Metal AppKit Beginner"
+        window.title = "reijee-renderer"
         window.acceptsMouseMovedEvents = true
 
 
@@ -66,12 +66,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         metalView.onKeyDown = { [weak self] keyCode in
             self?.pressedKeys.insert(keyCode)
-            print("Key down: \(keyCode), pressed: \(self?.pressedKeys ?? [])")
         }
         
         metalView.onKeyUp = { [weak self] keyCode in
             self?.pressedKeys.remove(keyCode)
-            print("Key up: \(keyCode)")
         }
         
         metalView.onMouseMove = { [weak self] deltaX, deltaY in
@@ -111,7 +109,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             var triangle = Triangle()
             triangle.scale(0.5)
-            triangle.translate(SIMD3<Float>(0.5,0.0,0.0))
+            triangle.translate(SIMD3<Float>(1.5,0.0,0.0))
             await renderer.addObject(objectName: "triangle", geometry: triangle, pipelineName: "coloredTriangle")
             let cube = Cube()
             await renderer.addObject(objectName: "cube", geometry: cube, pipelineName: "coloredTriangle")

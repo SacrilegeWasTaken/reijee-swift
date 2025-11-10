@@ -10,6 +10,7 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     fileprivate let camera: Camera
     private let pressedKeysProvider: () -> Set<UInt16>
     private let shiftProvider: () -> Bool
+    private var velocity = SIMD3<Float>(0, 0, 0)
 
 
     init(_ device: MTLDevice, pressedKeysProvider: @escaping () -> Set<UInt16>, shiftProvider: @escaping () -> Bool) {
@@ -116,24 +117,27 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     
     private func updateCamera() {
         let pressedKeys = pressedKeysProvider()
-        let speed: Float = 0.1
-        var movement = SIMD3<Float>(0, 0, 0)
+        let acceleration: Float = 0.008
+        let damping: Float = 0.85
+        var targetVelocity = SIMD3<Float>(0, 0, 0)
         
-        if pressedKeys.contains(13) { movement.z += speed } // W (инвертировано)
-        if pressedKeys.contains(1) { movement.z -= speed }  // S (инвертировано)
-        if pressedKeys.contains(0) { movement.x += speed }  // A (инвертировано)
-        if pressedKeys.contains(2) { movement.x -= speed }  // D (инвертировано)
-        if pressedKeys.contains(49) { movement.y += speed } // Space
-        if shiftProvider() { movement.y -= speed } // Shift
+        if pressedKeys.contains(13) { targetVelocity.z += 1 } // W
+        if pressedKeys.contains(1) { targetVelocity.z -= 1 }  // S
+        if pressedKeys.contains(0) { targetVelocity.x += 1 }  // A
+        if pressedKeys.contains(2) { targetVelocity.x -= 1 }  // D
+        if pressedKeys.contains(49) { targetVelocity.y += 1 } // Space
+        if shiftProvider() { targetVelocity.y -= 1 } // Shift
+        
+        velocity = velocity * damping + targetVelocity * acceleration
+        
+        if simd_length(velocity) > 0.001 {
+            camera.move(velocity)
+        }
 
         if pressedKeys.contains(123) { camera.rotate(yaw: -0.02, pitch: 0) } // Left arrow
         if pressedKeys.contains(124) { camera.rotate(yaw: 0.02, pitch: 0) }  // Right arrow
         if pressedKeys.contains(126) { camera.rotate(yaw: 0, pitch: 0.02) }  // Up arrow
         if pressedKeys.contains(125) { camera.rotate(yaw: 0, pitch: -0.02) } // Down arrow
-
-        if movement != SIMD3<Float>(0, 0, 0) {
-            camera.move(movement)
-        }
     }
 }
 

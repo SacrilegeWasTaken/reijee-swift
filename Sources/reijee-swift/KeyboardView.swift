@@ -29,12 +29,12 @@ class KeyboardView: MTKView {
         
         keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.onKeyDown?(event.keyCode)
-            return event
+            return nil
         }
         
         keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
             self?.onKeyUp?(event.keyCode)
-            return event
+            return nil
         }
         
         flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
