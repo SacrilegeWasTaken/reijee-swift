@@ -9,12 +9,9 @@ enum RenderMode {
 // Raytracing
 extension Renderer {
     private func buildAccelerationStructure() {
-        print("Building acceleration structure...")
         let objects = scene.getObjectsForRendering()
-        print("Number of objects: \(objects.count)")
         
         guard !objects.isEmpty else {
-            print("No objects to build acceleration structure")
             return
         }
         
@@ -25,7 +22,6 @@ extension Renderer {
             descriptor.indexBuffer = object.getIndexBuffer()
             descriptor.indexType = .uint16
             descriptor.triangleCount = object.indices().count / 3
-            print("  - Geometry with \(descriptor.triangleCount) triangles")
             return descriptor
         }
         
@@ -34,21 +30,17 @@ extension Renderer {
         
         let sizes = device.accelerationStructureSizes(descriptor: accelDescriptor)
         guard let accelStructure = device.makeAccelerationStructure(size: sizes.accelerationStructureSize) else {
-            print("Failed to create acceleration structure")
             return
         }
         
         guard let scratchBuffer = device.makeBuffer(length: sizes.buildScratchBufferSize, options: .storageModePrivate) else {
-            print("Failed to create scratch buffer")
             return
         }
         
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { 
-            print("Failed to create command buffer for AS build")
             return 
         }
         guard let encoder = commandBuffer.makeAccelerationStructureCommandEncoder() else { 
-            print("Failed to create AS encoder")
             return 
         }
         
@@ -60,14 +52,14 @@ extension Renderer {
         
         // Store immediately so it's available next frame
         self.accelerationStructure = accelStructure
-        print("Acceleration structure built successfully")
     }
 
     func drawRaytracing(in view: MTKView, drawable: MTLDrawable, descriptor: MTLRenderPassDescriptor) {
-        // Rebuild acceleration structure if needed
+        // Rebuild acceleration structure every frame to support animated geometry
+        buildAccelerationStructure()
+        
         if accelerationStructure == nil {
-            buildAccelerationStructure()
-            // Skip this frame to let AS build complete
+            // If build failed, show clear color
             descriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.1, 0.1, 0.2, 1.0)
             guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
             guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
@@ -86,14 +78,20 @@ extension Renderer {
             return 
         }
         
-        let width = view.drawableSize.width
-        let height = view.drawableSize.height
+        // Get texture info from descriptor instead of view to avoid MainActor issues
+        guard let msaaTexture = descriptor.colorAttachments[0].texture else {
+            print("No MSAA texture in descriptor")
+            return
+        }
+        
+        let width = msaaTexture.width
+        let height = msaaTexture.height
         
         // Create intermediate texture without MSAA for compute shader output
         let textureDescriptor = MTLTextureDescriptor()
-        textureDescriptor.pixelFormat = view.colorPixelFormat
-        textureDescriptor.width = Int(width)
-        textureDescriptor.height = Int(height)
+        textureDescriptor.pixelFormat = msaaTexture.pixelFormat
+        textureDescriptor.width = width
+        textureDescriptor.height = height
         textureDescriptor.usage = [.shaderWrite, .shaderRead]
         textureDescriptor.storageMode = .private
         
@@ -124,8 +122,8 @@ extension Renderer {
         
         let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
         let threadgroups = MTLSize(
-            width: (Int(width) + threadgroupSize.width - 1) / threadgroupSize.width,
-            height: (Int(height) + threadgroupSize.height - 1) / threadgroupSize.height,
+            width: (width + threadgroupSize.width - 1) / threadgroupSize.width,
+            height: (height + threadgroupSize.height - 1) / threadgroupSize.height,
             depth: 1
         )
         
@@ -179,8 +177,7 @@ extension Renderer {
                 float2(-1, 1), float2(1, -1), float2(1, 1)
             };
             float2 texCoords[6] = {
-                float2(0, 1), float2(1, 1), float2(0, 0),
-                float2(0, 0), float2(1, 1), float2(1, 0)
+                float2(0, 1), float2(1, 1), float2(0, 0),                float2(0, 0), float2(1, 1), float2(1, 0)
             };
             
             VertexOut out;
@@ -205,7 +202,7 @@ extension Renderer {
             pipelineDescriptor.vertexFunction = vertexFunc
             pipelineDescriptor.fragmentFunction = fragmentFunc
             pipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm_srgb
-            pipelineDescriptor.sampleCount = 4 // Match MSAA
+            pipelineDescriptor.rasterSampleCount = 4 // Match MSAA
             
             let pipeline = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
             return pipeline
