@@ -101,9 +101,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Добавляем треугольник в сцену
         Task {
-            var triangle = Triangle()
-            triangle.translate(SIMD3<Float>(1.5,0.0,0.0))
-            await renderer.addObject(objectName: "triangle", geometry: triangle, pipelineName: "coloredTriangle")
+            // var triangle = Triangle()
+            // triangle.translate(SIMD3<Float>(1.5,0.0,0.0))
+            // await renderer.addObject(objectName: "triangle", geometry: triangle, pipelineName: "coloredTriangle")
             var cube = Cube()
             cube.translate(SIMD3<Float>(-0.5,2.0,0.0))
             var cube2 = Cube()
@@ -113,14 +113,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let grid = Grid()
             await renderer.addObject(objectName: "grid", geometry: grid, pipelineName: "gridUnlimited")
             
-            let light = Light(type: .point, position: SIMD3<Float>(2, 5, 2), color: SIMD3<Float>(1, 1, 1), intensity: 10)
-            await renderer.addLight(name: "point", light: light)
+            let pointLight = PointLight(
+                position: SIMD3<Float>(2, 5, 2),
+                color: SIMD3<Float>(1, 1, 1),
+                intensity: 5,
+                softShadows: true,
+                shadowConfig: ShadowConfig(samples: 8, radius: 0.2)
+            )
+            await renderer.addLight(name: "pointLight", light: pointLight)
+            
+            // let areaLight = AreaLight(position: SIMD3<Float>(5, 2, 0), color: SIMD3<Float>(1, 1, 1), intensity: 5, size: SIMD2<Float>(2, 2), direction: SIMD3<Float>(-1, 0, 0), focus: 2.0, softShadows: true)
+            // await renderer.addLight(name: "areaLight", light: areaLight)
+            
             // Запускаем анимацию в главном потоке
             await MainActor.run {
                 self.animationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [renderer] _ in
                     Task {
-                        guard let object = await renderer.getObject(objectName: "triangle") else { return }
-                        object.rotate(0.02, axis: SIMD3<Float>(0, 1, 0))
+                        // guard let object = await renderer.getObject(objectName: "triangle") else { return }
+                        // object.rotate(0.02, axis: SIMD3<Float>(0, 1, 0))
                         guard let object = await renderer.getObject(objectName: "cube") else { return }
                         object.rotate(0.02, axis: SIMD3<Float>(0, 1, 0))
                     }

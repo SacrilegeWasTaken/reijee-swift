@@ -379,8 +379,8 @@ extension Renderer {
 
     func drawRaytracing(in view: MTKView, drawable: MTLDrawable, descriptor: MTLRenderPassDescriptor) {
         if accelerationStructure == nil && !asBuilding {
+            buildAccelerationStructure()
         }
-        buildAccelerationStructure()
         
         guard asReady, let accelStructure = accelerationStructure else {
             drawRasterization(in: view, drawable: drawable, descriptor: descriptor)
