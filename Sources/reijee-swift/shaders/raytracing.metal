@@ -95,6 +95,7 @@ bool traceShadow(ray r, primitive_acceleration_structure accelStructure, float m
 
 kernel void raytrace(
     texture2d<float, access::write> output [[texture(0)]],
+    texture2d<float, access::read_write> accumulation [[texture(1)]],
     constant CameraData& camera [[buffer(0)]],
     primitive_acceleration_structure accelStructure [[buffer(1)]],
     constant Vertex* vertices [[buffer(2)]],
@@ -102,6 +103,7 @@ kernel void raytrace(
     constant uint& samplesPerPixel [[buffer(4)]],
     constant uint& lightCount [[buffer(5)]],
     constant LightData* lights [[buffer(6)]],
+    constant uint& accumulatedSamples [[buffer(7)]],
     uint2 tid [[thread_position_in_grid]]
 ) {
     if (tid.x >= output.get_width() || tid.y >= output.get_height()) {
@@ -261,6 +263,13 @@ kernel void raytrace(
     }
     
     accumulatedColor /= float(samplesPerPixel);
+    
+    // Progressive accumulation
+    float4 previousColor = accumulation.read(tid);
+    float weight = 1.0 / float(accumulatedSamples);
+    float3 blendedColor = mix(previousColor.rgb, accumulatedColor, weight);
+    accumulation.write(float4(blendedColor, 1.0), tid);
+    accumulatedColor = blendedColor;
     
     // Draw light icons
     for (uint lightIdx = 0; lightIdx < lightCount; lightIdx++) {

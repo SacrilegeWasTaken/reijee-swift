@@ -30,6 +30,12 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     private var samplesPerPixel: Int = 1
     private var threadGroupSizeOneDimension: Int = 16
     private var frameIndex: UInt32 = 0
+    
+    // Progressive rendering
+    private var accumulationTexture: MTLTexture?
+    private var accumulatedSamples: UInt32 = 0
+    private var lastCameraData: CameraData?
+    private let maxAccumulatedSamples: UInt32 = 1024
 
     init(_ device: MTLDevice, pressedKeysProvider: @escaping () -> Set<UInt16>, shiftProvider: @escaping () -> Bool) {
         self.device = device
@@ -111,6 +117,15 @@ extension Renderer {
         renderMode.write { mode in
             mode = mode == .rasterization ? .raytracing : .rasterization
         }
+        invalidateAccelerationStructure()
+    }
+    
+    private func invalidateAccelerationStructure() {
+        accelerationStructure = nil
+        combinedVertexBuffer = nil
+        combinedIndexBuffer = nil
+        asReady = false
+        asBuilding = false
     }
 
     private func updateInput() {
@@ -130,6 +145,7 @@ extension Renderer {
         let acceleration: Float = 0.008
         let damping: Float = 0.85
         var targetVelocity = SIMD3<Float>(0, 0, 0)
+        var cameraMoved = false
         
         if pressedKeys.contains(13) { targetVelocity.z += 1 } // W
         if pressedKeys.contains(1) { targetVelocity.z -= 1 }  // S
@@ -142,16 +158,26 @@ extension Renderer {
         
         if simd_length(cameraVelocity) > 0.001 {
             camera.move(cameraVelocity)
+            cameraMoved = true
         }
 
-        if pressedKeys.contains(123) { camera.rotate(yaw: -0.02, pitch: 0) } // Left arrow
-        if pressedKeys.contains(124) { camera.rotate(yaw: 0.02, pitch: 0) }  // Right arrow
-        if pressedKeys.contains(126) { camera.rotate(yaw: 0, pitch: 0.02) }  // Up arrow
-        if pressedKeys.contains(125) { camera.rotate(yaw: 0, pitch: -0.02) } // Down arrow
+        if pressedKeys.contains(123) { camera.rotate(yaw: -0.02, pitch: 0); cameraMoved = true } // Left arrow
+        if pressedKeys.contains(124) { camera.rotate(yaw: 0.02, pitch: 0); cameraMoved = true }  // Right arrow
+        if pressedKeys.contains(126) { camera.rotate(yaw: 0, pitch: 0.02); cameraMoved = true }  // Up arrow
+        if pressedKeys.contains(125) { camera.rotate(yaw: 0, pitch: -0.02); cameraMoved = true } // Down arrow
+        
+        if cameraMoved {
+            resetAccumulation()
+        }
     }
 
     func rotateCamera(yaw: Float, pitch: Float) {
         camera.rotate(yaw: yaw, pitch: pitch)
+        resetAccumulation()
+    }
+    
+    private func resetAccumulation() {
+        accumulatedSamples = 0
     }
 }
 
@@ -183,10 +209,21 @@ extension Renderer {
         )
 
         await scene.addObject(objectName: objectName, object)
+        invalidateAccelerationStructure()
+        resetAccumulation()
+    }
+    
+    private func cameraDataEqual(_ a: CameraData, _ b: CameraData) -> Bool {
+        return simd_distance(a.position, b.position) < 0.0001 &&
+               simd_distance(a.forward, b.forward) < 0.0001 &&
+               simd_distance(a.right, b.right) < 0.0001 &&
+               simd_distance(a.up, b.up) < 0.0001
     }
     
     func removeObject(at objectName: String) async {
        await scene.removeObject(at: objectName)
+       invalidateAccelerationStructure()
+       resetAccumulation()
     }
     
     func getObjects() async -> [SceneObject] {
@@ -210,10 +247,12 @@ extension Renderer {
 extension Renderer {
     func addLight(name: String, light: Light) async {
         await scene.addLight(name: name, light)
+        resetAccumulation()
     }
     
     func removeLight(name: String) async {
         await scene.removeLight(name: name)
+        resetAccumulation()
     }
     
     func getLight(name: String) async -> Light? {
@@ -417,8 +456,33 @@ extension Renderer {
         
         // Setup camera data
         let aspect = Float(width) / Float(height)
-        frameIndex = frameIndex &+ 1
         var cameraData = camera.getCameraData(fov: .pi / 3, aspect: aspect, frameIndex: frameIndex)
+        
+        // Check if camera moved
+        if let lastCamera = lastCameraData {
+            if !cameraDataEqual(lastCamera, cameraData) {
+                resetAccumulation()
+            }
+        }
+        lastCameraData = cameraData
+        
+        // Create or recreate accumulation texture if needed
+        if accumulationTexture == nil || accumulationTexture!.width != width || accumulationTexture!.height != height {
+            let accumulationDescriptor = MTLTextureDescriptor()
+            accumulationDescriptor.pixelFormat = .rgba32Float
+            accumulationDescriptor.width = width
+            accumulationDescriptor.height = height
+            accumulationDescriptor.usage = [.shaderWrite, .shaderRead]
+            accumulationDescriptor.storageMode = .private
+            accumulationTexture = device.makeTexture(descriptor: accumulationDescriptor)
+            resetAccumulation()
+        }
+        
+        // Increment samples if not at max
+        if accumulatedSamples < maxAccumulatedSamples {
+            accumulatedSamples += 1
+            frameIndex = frameIndex &+ 1
+        }
 
 
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { 
@@ -452,6 +516,7 @@ extension Renderer {
         // arguments for a compute shader
         computeEncoder.setComputePipelineState(computePipeline) // need to be first 
         computeEncoder.setTexture(outputTexture, index: 0)
+        computeEncoder.setTexture(accumulationTexture, index: 1)
         computeEncoder.setBytes(&cameraData, length: MemoryLayout<CameraData>.stride, index: 0)
         computeEncoder.setAccelerationStructure(accelStructure, bufferIndex: 1)
         computeEncoder.setBuffer(vertexBuffer, offset: 0, index: 2)
@@ -461,6 +526,7 @@ extension Renderer {
         if !lightDataArray.isEmpty {
             computeEncoder.setBytes(&lightDataArray, length: MemoryLayout<LightData>.stride * lightDataArray.count, index: 6)
         }
+        computeEncoder.setBytes(&accumulatedSamples, length: MemoryLayout<UInt32>.stride, index: 7)
         
         let threadgroupSize = MTLSize(width: threadGroupSizeOneDimension, height: threadGroupSizeOneDimension, depth: 1) // TODO: make it configurable
         let threadgroups = MTLSize(
