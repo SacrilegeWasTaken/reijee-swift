@@ -10,6 +10,7 @@ struct CameraData {
     float3 up;
     float fov;
     float aspect;
+    uint frameIndex;
 };
 
 struct Vertex {
@@ -100,8 +101,8 @@ kernel void raytrace(
     for (uint sample = 0; sample < samplesPerPixel; sample++) {
         // Jitter для anti-aliasing
         float2 jitter = float2(
-            random(float2(tid) + float(sample) * 0.1),
-            random(float2(tid) + float(sample) * 0.2)
+            random(float2(tid) + float(sample) * 0.1 + float(camera.frameIndex)),
+            random(float2(tid) + float(sample) * 0.2 + float(camera.frameIndex))
         ) - 0.5;
         
         // Generate primary ray
@@ -171,16 +172,16 @@ kernel void raytrace(
         
         // Shadow
         ray shadowRay;
-        shadowRay.origin = hitPos + normal * 0.001;
+        shadowRay.origin = hitPos + normal * 0.01;
         shadowRay.direction = lightDir;
         shadowRay.min_distance = 0.001;
         float shadow = traceShadow(shadowRay, accelStructure, length(lightPos - hitPos)) ? 0.3 : 1.0;
         
         // Ambient occlusion
-        // Better world-space seed
+        // Better world-space seed with frameIndex
         uint2 posSeed = uint2(
-            fract(sin(dot(hitPos.xy, float2(12.9898, 78.233))) * 43758.5453) * 10000.0,
-            fract(sin(dot(hitPos.yz, float2(39.346, 11.135))) * 43758.5453) * 10000.0
+            fract(sin(dot(hitPos.xy + float2(camera.frameIndex), float2(12.9898, 78.233))) * 43758.5453) * 10000.0,
+            fract(sin(dot(hitPos.yz + float2(camera.frameIndex), float2(39.346, 11.135))) * 43758.5453) * 10000.0
         );
         float ao = computeAO(hitPos, normal, accelStructure, posSeed);
 

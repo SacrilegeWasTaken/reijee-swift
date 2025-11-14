@@ -29,6 +29,7 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     private var asReady = false
     private var samplesPerPixel: Int = 1
     private var threadGroupSizeOneDimension: Int = 16
+    private var frameIndex: UInt32 = 0
 
     init(_ device: MTLDevice, pressedKeysProvider: @escaping () -> Set<UInt16>, shiftProvider: @escaping () -> Bool) {
         self.device = device
@@ -392,7 +393,8 @@ extension Renderer {
         
         // Setup camera data
         let aspect = Float(width) / Float(height)
-        var cameraData = camera.getCameraData(fov: .pi / 3, aspect: aspect)
+        frameIndex = frameIndex &+ 1
+        var cameraData = camera.getCameraData(fov: .pi / 3, aspect: aspect, frameIndex: frameIndex)
 
 
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { 

@@ -13,4 +13,5 @@ struct CameraData {
     var up: SIMD3<Float>
     var fov: Float
     var aspect: Float
+    var frameIndex: UInt32
 }

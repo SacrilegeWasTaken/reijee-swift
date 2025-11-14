@@ -138,7 +138,8 @@ actor Scene {
         return cachedObjects
     }
 
+    // importance of determined object indexes
     func updateCache () {
-        cachedObjects = Array(objects.values)
+        cachedObjects = objects.keys.sorted().compactMap { objects[$0] }
     }
 }
