@@ -31,6 +31,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var isShiftPressed = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        setenv("MTL_HUD_ENABLED", "1", 1)
         let contentRect = NSRect(x: 0, y: 0, width: 800, height: 800)
         window = NSWindow(contentRect: contentRect,
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -93,38 +94,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
    func setupRenderer() {
-        let triangleShaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/shaders.metal")
-        renderer.registerLibrary(libraryName: "triangle", shaderPath: triangleShaderPath)
-        let gridShaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/grid.metal")
-        renderer.registerLibrary(libraryName: "grid", shaderPath: gridShaderPath)
-        let raytracingShaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/raytracing.metal")
-        renderer.registerLibrary(libraryName: "raytracing", shaderPath: raytracingShaderPath)
-        
-        // Регистрируем pipeline
-        renderer.registerPipeline(
-            pipelineName: "coloredTriangle",
-            libraryName: "triangle",
-            vertexFunction: "vertex_main",
-            fragmentFunction: "fragment_main",
-            pixelFormat: .bgra8Unorm_srgb
-        )
-
-        renderer.registerPipeline(
-            pipelineName: "gridUnlimited",
-            libraryName: "grid",
-            vertexFunction: "grid_vertex",
-            fragmentFunction: "grid_fragment",
-            pixelFormat: .bgra8Unorm_srgb
-        )
-        
-        // Регистрируем compute pipeline для raytracing
-        renderer.registerComputePipeline(
-            pipelineName: "raytracing",
-            libraryName: "raytracing",
-            kernelFunction: "raytrace"
-        )
-        
         let renderer = self.renderer!
+
+        registerRasterizationShaders()
+        registerRaytracingShaders()
+        
         // Добавляем треугольник в сцену
         Task {
             var triangle = Triangle()
@@ -151,5 +125,48 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func registerRasterizationShaders() {
+        let triangleShaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/shaders.metal")
+        renderer.registerLibrary(libraryName: "triangle", shaderPath: triangleShaderPath)
+        let gridShaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/grid.metal")
+        renderer.registerLibrary(libraryName: "grid", shaderPath: gridShaderPath)
 
+        renderer.registerPipeline(
+            pipelineName: "coloredTriangle",
+            libraryName: "triangle",
+            vertexFunction: "vertex_main",
+            fragmentFunction: "fragment_main",
+            pixelFormat: .bgra8Unorm_srgb
+        )
+
+        renderer.registerPipeline(
+            pipelineName: "gridUnlimited",
+            libraryName: "grid",
+            vertexFunction: "grid_vertex",
+            fragmentFunction: "grid_fragment",
+            pixelFormat: .bgra8Unorm_srgb
+        )
+    }
+
+    func registerRaytracingShaders() {
+        let raytracingShaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/raytracing.metal")
+        renderer.registerLibrary(libraryName: "raytracing", shaderPath: raytracingShaderPath)
+        let blitShaderPath = #filePath.replacingOccurrences(of: "reijee_swift.swift", with: "shaders/blit.metal")
+        renderer.registerLibrary(libraryName: "blit", shaderPath: blitShaderPath)
+
+         renderer.registerPipeline(
+            pipelineName: "blit",
+            libraryName: "blit",
+            vertexFunction: "blit_vertex",
+            fragmentFunction: "blit_fragment",
+            pixelFormat: .bgra8Unorm_srgb
+        )
+    
+        // Регистрируем compute pipeline для raytracing
+        renderer.registerComputePipeline(
+            pipelineName: "raytracing",
+            libraryName: "raytracing",
+            kernelFunction: "raytrace"
+        )
+    }
 }
