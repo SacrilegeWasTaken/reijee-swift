@@ -105,7 +105,64 @@ extension SceneObject: Geometry {
 actor Scene {
     private var objects: [String: SceneObject] = [:]
     nonisolated(unsafe) private var cachedObjects: [SceneObject] = []
+
+    private var lights: [String: Light] = [:]
+    nonisolated(unsafe) private var cachedLights: [Light] = []
+
+    func clear() {
+        lights.removeAll()
+        objects.removeAll()
+        updateCache()
+    }
+
+    nonisolated func getObjectsForRendering() -> [SceneObject] {
+        return cachedObjects
+    }
+
+    nonisolated func getLightsForRendering() -> [Light] {
+        return cachedLights
+    }
+
+    // importance of determined object indexes
+    func updateCache () {
+        cachedObjects = objects.keys.sorted().compactMap { objects[$0] }
+        cachedLights = lights.keys.sorted().compactMap { lights[$0] }
+    }
+}
+
+// Light
+extension Scene {
+    func addLight(name: String, _ light: Light) {
+        lights[name] = light
+        updateCache()
+    }
     
+    func removeLight(name: String) {
+        lights.removeValue(forKey: name)
+        updateCache()
+    }
+    
+    func getLight(name: String) -> Light? {
+        return lights[name]
+    }
+    
+    func getAllLights() -> [Light] {
+        return Array(lights.values)
+    }
+    
+    func getAllLightIDs() -> [String] {
+        return Array(lights.keys)
+    }
+
+    func clearLights() {
+        lights.removeAll()
+        updateCache()
+    }
+}
+
+
+// Objects
+extension Scene {
     func addObject(objectName: String, _ object: SceneObject) {
         objects[objectName] = object
         updateCache()
@@ -129,17 +186,8 @@ actor Scene {
         return objects[id]
     }
     
-    func clear() {
+    func clearObjects() {
         objects.removeAll()
         updateCache()
-    }
-
-    nonisolated func getObjectsForRendering() -> [SceneObject] {
-        return cachedObjects
-    }
-
-    // importance of determined object indexes
-    func updateCache () {
-        cachedObjects = objects.keys.sorted().compactMap { objects[$0] }
     }
 }

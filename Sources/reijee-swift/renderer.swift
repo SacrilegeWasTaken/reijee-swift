@@ -206,6 +206,33 @@ extension Renderer {
     }
 }
 
+// LIGHT CONTROLS
+extension Renderer {
+    func addLight(name: String, light: Light) async {
+        await scene.addLight(name: name, light)
+    }
+    
+    func removeLight(name: String) async {
+        await scene.removeLight(name: name)
+    }
+    
+    func getLight(name: String) async -> Light? {
+        return await scene.getLight(name: name)
+    }
+    
+    func getAllLights() async -> [Light] {
+        return await scene.getAllLights()
+    }
+    
+    func getAllLightIDs() async -> [String] {
+        return await scene.getAllLightIDs()
+    }
+    
+    func clearLights() async {
+        await scene.clearLights()
+    }
+}
+
 // Rasterization render mode
 extension Renderer {
     func drawRasterization(in view: MTKView, drawable: MTLDrawable, descriptor: MTLRenderPassDescriptor) {
@@ -269,29 +296,16 @@ extension Renderer {
         // Combine all vertices and indices into single buffers
         var allVertices: [Vertex] = []
         var allIndices: [UInt16] = []
-        var indexOffset: UInt16 = 0
         
-        // GEOMETRY DESCRIPTORS FOR EACH OBJECT IN THE SCENE
-        let geometries = objects.map { object -> MTLAccelerationStructureTriangleGeometryDescriptor in
+        for object in objects {
             let vertices = object.vertices()
             let indices = object.indices()
             
-            // Add vertices
+            let vertexOffset = UInt16(allVertices.count)
             allVertices.append(contentsOf: vertices)
             
-            // Add indices with offset
-            let offsetIndices = indices.map { $0 + indexOffset }
+            let offsetIndices = indices.map { $0 + vertexOffset }
             allIndices.append(contentsOf: offsetIndices)
-            indexOffset += UInt16(vertices.count)
-            
-            // Create geometry descriptor
-            let descriptor = MTLAccelerationStructureTriangleGeometryDescriptor()
-            descriptor.vertexBuffer = object.getVertexBuffer()
-            descriptor.vertexStride = MemoryLayout<Vertex>.stride
-            descriptor.indexBuffer = object.getIndexBuffer()
-            descriptor.indexType = .uint16
-            descriptor.triangleCount = indices.count / 3
-            return descriptor
         }
         
         // Create combined buffers
@@ -306,6 +320,16 @@ extension Renderer {
             length: allIndices.count * MemoryLayout<UInt16>.stride,
             options: []
         )
+        
+        // Single geometry descriptor for all objects
+        let geometryDescriptor = MTLAccelerationStructureTriangleGeometryDescriptor()
+        geometryDescriptor.vertexBuffer = combinedVertexBuffer
+        geometryDescriptor.vertexStride = MemoryLayout<Vertex>.stride
+        geometryDescriptor.indexBuffer = combinedIndexBuffer
+        geometryDescriptor.indexType = .uint16
+        geometryDescriptor.triangleCount = allIndices.count / 3
+        
+        let geometries = [geometryDescriptor]
         
         let accelDescriptor = MTLPrimitiveAccelerationStructureDescriptor()
         accelDescriptor.geometryDescriptors = geometries
@@ -355,8 +379,8 @@ extension Renderer {
 
     func drawRaytracing(in view: MTKView, drawable: MTLDrawable, descriptor: MTLRenderPassDescriptor) {
         if accelerationStructure == nil && !asBuilding {
-            buildAccelerationStructure()
         }
+        buildAccelerationStructure()
         
         guard asReady, let accelStructure = accelerationStructure else {
             drawRasterization(in: view, drawable: drawable, descriptor: descriptor)
@@ -420,6 +444,11 @@ extension Renderer {
 
         var samples = UInt32(samplesPerPixel)
         
+        // Setup lights
+        let lights = scene.getLightsForRendering()
+        var lightDataArray = lights.map { $0.toLightData() }
+        var lightCount = UInt32(lightDataArray.count)
+        
         // arguments for a compute shader
         computeEncoder.setComputePipelineState(computePipeline) // need to be first 
         computeEncoder.setTexture(outputTexture, index: 0)
@@ -428,6 +457,10 @@ extension Renderer {
         computeEncoder.setBuffer(vertexBuffer, offset: 0, index: 2)
         computeEncoder.setBuffer(indexBuffer, offset: 0, index: 3)
         computeEncoder.setBytes(&samples, length: MemoryLayout<UInt32>.stride, index: 4)
+        computeEncoder.setBytes(&lightCount, length: MemoryLayout<UInt32>.stride, index: 5)
+        if !lightDataArray.isEmpty {
+            computeEncoder.setBytes(&lightDataArray, length: MemoryLayout<LightData>.stride * lightDataArray.count, index: 6)
+        }
         
         let threadgroupSize = MTLSize(width: threadGroupSizeOneDimension, height: threadGroupSizeOneDimension, depth: 1) // TODO: make it configurable
         let threadgroups = MTLSize(

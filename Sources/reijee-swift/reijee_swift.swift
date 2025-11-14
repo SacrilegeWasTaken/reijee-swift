@@ -104,13 +104,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             var triangle = Triangle()
             triangle.translate(SIMD3<Float>(1.5,0.0,0.0))
             await renderer.addObject(objectName: "triangle", geometry: triangle, pipelineName: "coloredTriangle")
-            let cube = Cube()
+            var cube = Cube()
+            cube.translate(SIMD3<Float>(-0.5,2.0,0.0))
             var cube2 = Cube()
             cube2.translate(SIMD3<Float>(-3,0.0,0.0))
             await renderer.addObject(objectName: "cube", geometry: cube, pipelineName: "coloredTriangle")
             await renderer.addObject(objectName: "cube2", geometry: cube2, pipelineName: "coloredTriangle")
             let grid = Grid()
             await renderer.addObject(objectName: "grid", geometry: grid, pipelineName: "gridUnlimited")
+            
+            let light = Light(type: .point, position: SIMD3<Float>(2, 5, 2), color: SIMD3<Float>(1, 1, 1), intensity: 10)
+            await renderer.addLight(name: "point", light: light)
             // Запускаем анимацию в главном потоке
             await MainActor.run {
                 self.animationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [renderer] _ in

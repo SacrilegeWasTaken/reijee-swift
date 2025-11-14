@@ -143,14 +143,95 @@ struct Cube: Geometry, Transformable {
 }
 
 struct Grid: Geometry, Transformable {
-    private var _vertices = [
-        Vertex(position: SIMD3<Float>(-1000, 0, -1000), color: SIMD4<Float>(0.3, 0.3, 0.3, 1)),
-        Vertex(position: SIMD3<Float>( 1000, 0, -1000), color: SIMD4<Float>(0.3, 0.3, 0.3, 1)),
-        Vertex(position: SIMD3<Float>( 1000, 0,  1000), color: SIMD4<Float>(0.3, 0.3, 0.3, 1)),
-        Vertex(position: SIMD3<Float>(-1000, 0,  1000), color: SIMD4<Float>(0.3, 0.3, 0.3, 1))
-    ]
+    private var _vertices: [Vertex]
+    private var _indices: [UInt16]
     
-    private let _indices: [UInt16] = [0, 1, 2, 0, 2, 3]
+    init(size: Float = 50, divisions: Int = 20) {
+        var vertices: [Vertex] = []
+        var indices: [UInt16] = []
+        
+        let step = (size * 2) / Float(divisions)
+        let color = SIMD4<Float>(0.8, 0.8, 0.8, 1)
+        
+        for i in 0...divisions {
+            for j in 0...divisions {
+                let x = -size + Float(i) * step
+                let z = -size + Float(j) * step
+                vertices.append(Vertex(position: SIMD3<Float>(x, 0, z), color: color))
+            }
+        }
+        
+        for i in 0..<divisions {
+            for j in 0..<divisions {
+                let topLeft = UInt16(i * (divisions + 1) + j)
+                let topRight = topLeft + 1
+                let bottomLeft = UInt16((i + 1) * (divisions + 1) + j)
+                let bottomRight = bottomLeft + 1
+                
+                indices.append(contentsOf: [topLeft, bottomLeft, topRight])
+                indices.append(contentsOf: [topRight, bottomLeft, bottomRight])
+            }
+        }
+        
+        _vertices = vertices
+        _indices = indices
+    }
+    
+    func vertices() -> [Vertex] { _vertices }
+    func indices() -> [UInt16] { _indices }
+    
+    mutating func translate(_ delta: SIMD3<Float>) {
+        for i in 0..<_vertices.count {
+            _vertices[i].position += delta
+        }
+    }
+    
+    mutating func rotate(_ angle: Float, axis: SIMD3<Float>) {}
+    mutating func scale(_ factor: Float) {}
+}
+
+struct Sphere: Geometry, Transformable {
+    private var _vertices: [Vertex]
+    private var _indices: [UInt16]
+    
+    init(radius: Float = 0.1, segments: Int = 8, color: SIMD4<Float> = SIMD4<Float>(1, 1, 1, 1)) {
+        var vertices: [Vertex] = []
+        var indices: [UInt16] = []
+        
+        for lat in 0...segments {
+            let theta = Float(lat) * .pi / Float(segments)
+            let sinTheta = sin(theta)
+            let cosTheta = cos(theta)
+            
+            for lon in 0...segments {
+                let phi = Float(lon) * 2 * .pi / Float(segments)
+                let sinPhi = sin(phi)
+                let cosPhi = cos(phi)
+                
+                let x = cosPhi * sinTheta
+                let y = cosTheta
+                let z = sinPhi * sinTheta
+                
+                vertices.append(Vertex(
+                    position: SIMD3<Float>(x * radius, y * radius, z * radius),
+                    color: color
+                ))
+            }
+        }
+        
+        for lat in 0..<segments {
+            for lon in 0..<segments {
+                let first = UInt16(lat * (segments + 1) + lon)
+                let second = first + UInt16(segments + 1)
+                
+                indices.append(contentsOf: [first, second, first + 1])
+                indices.append(contentsOf: [second, second + 1, first + 1])
+            }
+        }
+        
+        _vertices = vertices
+        _indices = indices
+    }
     
     func vertices() -> [Vertex] { _vertices }
     func indices() -> [UInt16] { _indices }

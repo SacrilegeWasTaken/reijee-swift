@@ -18,6 +18,17 @@ struct Vertex {
     float4 color;
 };
 
+struct LightData {
+    float3 position;
+    uint type;
+    float3 color;
+    float intensity;
+    float3 direction;
+    float2 size;
+    float radius;
+    float _padding;
+};
+
 // Compute normal from triangle vertices
 float3 computeNormal(float3 v0, float3 v1, float3 v2) {
     float3 e1 = v1 - v0;
@@ -90,6 +101,8 @@ kernel void raytrace(
     constant Vertex* vertices [[buffer(2)]],
     constant uint16_t* indices [[buffer(3)]],
     constant uint& samplesPerPixel [[buffer(4)]],
+    constant uint& lightCount [[buffer(5)]],
+    constant LightData* lights [[buffer(6)]],
     uint2 tid [[thread_position_in_grid]]
 ) {
     if (tid.x >= output.get_width() || tid.y >= output.get_height()) {
@@ -127,9 +140,7 @@ kernel void raytrace(
         i.assume_geometry_type(geometry_type::triangle);
         intersection_result<triangle_data> intersection = i.intersect(r, accelStructure);
         
-        // Sky gradient
-        float3 skyColor = mix(float3(0.5, 0.7, 1.0), float3(0.1, 0.2, 0.4), direction.y * 0.5 + 0.5);
-        float3 color = skyColor;
+        float3 color = float3(0.0);
     
     if (intersection.type == intersection_type::triangle) {
         // Get barycentric coordinates
@@ -155,81 +166,90 @@ kernel void raytrace(
         // Compute normal
         float3 normal = computeNormal(v0.position, v1.position, v2.position);
         
+        // Flip normal if facing away from camera
+        if (dot(normal, -r.direction) < 0.0) {
+            normal = -normal;
+        }
+        
         // Hit position
         float3 hitPos = r.origin + r.direction * intersection.distance;
         
-        // Lighting
-        float3 lightPos = float3(5.0, 8.0, 5.0);
-        float3 lightDir = normalize(lightPos - hitPos);
-        float3 viewDir = normalize(camera.position - hitPos);
-        float3 halfDir = normalize(lightDir + viewDir);
+        // Lighting from all sources
+        float3 totalLight = float3(0.0);
         
-        // Diffuse
-        float diffuse = max(0.0, dot(normal, lightDir));
-        
-        // Specular (Blinn-Phong)
-        float specular = pow(max(0.0, dot(normal, halfDir)), 32.0);
-        
-        // Shadow
-        ray shadowRay;
-        shadowRay.origin = hitPos + normal * 0.01;
-        shadowRay.direction = lightDir;
-        shadowRay.min_distance = 0.001;
-        float shadow = traceShadow(shadowRay, accelStructure, length(lightPos - hitPos)) ? 0.3 : 1.0;
-        
-        // Ambient occlusion
-        // Better world-space seed with frameIndex
-        uint2 posSeed = uint2(
-            fract(sin(dot(hitPos.xy + float2(camera.frameIndex), float2(12.9898, 78.233))) * 43758.5453) * 10000.0,
-            fract(sin(dot(hitPos.yz + float2(camera.frameIndex), float2(39.346, 11.135))) * 43758.5453) * 10000.0
-        );
-        float ao = computeAO(hitPos, normal, accelStructure, posSeed);
-
-
-        
-        // Ambient light
-        float3 ambient = float3(0.2, 0.25, 0.3) * ao;
-        
-        // Combine lighting
-        float3 lighting = ambient + (diffuse * shadow + specular * 0.3 * shadow) * float3(1.0, 0.95, 0.9);
-        
-        // Simple reflection
-        float3 reflectionColor = float3(0.0);
-        float reflectivity = 0.2;
-        
-        if (reflectivity > 0.0) {
-            ray reflectRay;
-            reflectRay.origin = hitPos + normal * 0.001;
-            reflectRay.direction = reflect(r.direction, normal);
-            reflectRay.min_distance = 0.001;
-            reflectRay.max_distance = 1000.0;
+        for (uint lightIdx = 0; lightIdx < lightCount; lightIdx++) {
+            LightData light = lights[lightIdx];
+            float3 lightPos = light.position;
+            float3 lightColor = light.color * light.intensity;
+            float3 toLight = lightPos - hitPos;
+            float distToLight = length(toLight);
+            float3 lightDir = toLight / distToLight;
             
-            auto reflectHit = i.intersect(reflectRay, accelStructure);
-            if (reflectHit.type == intersection_type::triangle) {
-                // Simple environment reflection
-                float3 reflectDir = reflectRay.direction;
-                reflectionColor = mix(
-                    float3(0.5, 0.7, 1.0),
-                    float3(0.1, 0.2, 0.4),
-                    reflectDir.y * 0.5 + 0.5
-                );
-            } else {
-                reflectionColor = skyColor;
+            // Diffuse
+            float diffuse = max(0.0, dot(normal, lightDir));
+
+            // Attenuation (inverse square law)
+            float attenuation = 1.0 / (distToLight * distToLight);
+
+            // Shadow
+            float shadow = 1.0;
+            if (diffuse > 0.0) {
+                ray shadowRay;
+                shadowRay.origin = hitPos + normal * 0.001;
+                shadowRay.direction = lightDir;
+                shadowRay.min_distance = 0.001;
+                shadowRay.max_distance = distToLight - 0.001;
+                shadow = traceShadow(shadowRay, accelStructure, distToLight - 0.001) ? 0.0 : 1.0;
             }
+
+            totalLight += diffuse * shadow * lightColor * attenuation;
+
         }
         
-        // Final color
-        color = vertexColor * lighting + reflectionColor * reflectivity;
-        
-        // Distance fog
-        float fogDensity = 0.02;
-        float fogFactor = exp(-intersection.distance * fogDensity);
-        color = mix(skyColor, color, fogFactor);
+        color = vertexColor * totalLight;
     }
         
         accumulatedColor += color;
     }
     
     accumulatedColor /= float(samplesPerPixel);
+    
+    // Draw light icons on top
+    for (uint lightIdx = 0; lightIdx < lightCount; lightIdx++) {
+        LightData light = lights[lightIdx];
+        float3 lightPos = light.position;
+        
+        // Project light position to screen
+        float3 toLight = lightPos - camera.position;
+        float distToLight = length(toLight);
+        float3 lightDir = toLight / distToLight;
+        
+        // Check if light is in front of camera
+        float dotForward = dot(lightDir, camera.forward);
+        if (dotForward > 0.0) {
+            // Project to screen space
+            float tanHalfFov = tan(camera.fov * 0.5);
+            float3 relativePos = toLight;
+            float rightDist = dot(relativePos, camera.right);
+            float upDist = dot(relativePos, camera.up);
+            float forwardDist = dot(relativePos, camera.forward);
+            
+            float screenX = (rightDist / (forwardDist * tanHalfFov * camera.aspect)) * 0.5 + 0.5;
+            float screenY = -(upDist / (forwardDist * tanHalfFov)) * 0.5 + 0.5;
+            
+            float2 screenPos = float2(screenX * float(output.get_width()), screenY * float(output.get_height()));
+            float2 pixelPos = float2(tid);
+            float dist = length(screenPos - pixelPos);
+            
+            // Draw a small circle for the light
+
+            if (dist < 10.0) {
+                float falloff = 1.0 - (dist / 10.0);
+                accumulatedColor = mix(accumulatedColor, light.color * light.intensity * 2.0, falloff);
+            }
+
+        }
+    }
+    
     output.write(float4(accumulatedColor, 1.0), tid);
 }
