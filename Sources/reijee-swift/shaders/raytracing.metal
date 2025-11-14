@@ -104,6 +104,9 @@ kernel void raytrace(
     constant uint& lightCount [[buffer(5)]],
     constant LightData* lights [[buffer(6)]],
     constant uint& accumulatedSamples [[buffer(7)]],
+    constant uint& aoEnabled [[buffer(8)]],
+    constant uint& aoSamples [[buffer(9)]],
+    constant float& aoRadius [[buffer(10)]],
     uint2 tid [[thread_position_in_grid]]
 ) {
     if (tid.x >= output.get_width() || tid.y >= output.get_height()) {
@@ -162,6 +165,29 @@ kernel void raytrace(
         }
         
         float3 hitPos = r.origin + r.direction * intersection.distance;
+        
+        // Ambient Occlusion
+        float ao = 1.0;
+        
+        if (aoEnabled == 1) {
+            ao = 0.0;
+            for (uint aoIdx = 0; aoIdx < aoSamples; aoIdx++) {
+                uint aoSeed = tid.x + tid.y * output.get_width() + aoIdx * 7777u + sample * 8888u + camera.frameIndex * 9999u;
+                float3 aoDir = randomCosineHemisphere(aoSeed, normal);
+                
+                ray aoRay;
+                aoRay.origin = hitPos + normal * 0.001;
+                aoRay.direction = aoDir;
+                aoRay.min_distance = 0.001;
+                aoRay.max_distance = aoRadius;
+                
+                if (!traceShadow(aoRay, accelStructure, aoRadius)) {
+                    ao += 1.0;
+                }
+            }
+            ao /= float(aoSamples);
+        }
+        
         float3 totalLight = float3(0.0);
         
         for (uint lightIdx = 0; lightIdx < lightCount; lightIdx++) {
@@ -256,7 +282,7 @@ kernel void raytrace(
             totalLight += diffuse * shadow * lightColor * attenuation;
         }
         
-        color = vertexColor * totalLight;
+        color = vertexColor * totalLight * ao;
     }
         
         accumulatedColor += color;

@@ -68,10 +68,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         metalView.onKeyDown = { [weak self] keyCode in
             self?.pressedKeys.insert(keyCode)
+            self?.renderer.handleKeyPress(keyCode)
         }
         
         metalView.onKeyUp = { [weak self] keyCode in
             self?.pressedKeys.remove(keyCode)
+            self?.renderer.handleKeyRelease(keyCode)
         }
         
         metalView.onMouseMove = { [weak self] deltaX, deltaY in

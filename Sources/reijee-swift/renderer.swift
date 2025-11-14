@@ -19,7 +19,7 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     private var cameraVelocity = SIMD3<Float>(0, 0, 0)
 
     private var renderMode = RwLock<RenderMode>(.rasterization)
-    private var wasMPressed = false
+    private var mKeyPressed = RwLock<Bool>(false)
 
     // Raytrace
     private var accelerationStructure: MTLAccelerationStructure?
@@ -36,6 +36,11 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     private var accumulatedSamples: UInt32 = 0
     private var lastCameraData: CameraData?
     private let maxAccumulatedSamples: UInt32 = 1024
+    
+    // AO settings
+    var aoEnabled: Bool = true
+    var aoSamples: UInt32 = 8
+    var aoRadius: Float = 1.0
 
     init(_ device: MTLDevice, pressedKeysProvider: @escaping () -> Set<UInt16>, shiftProvider: @escaping () -> Bool) {
         self.device = device
@@ -118,6 +123,7 @@ extension Renderer {
             mode = mode == .rasterization ? .raytracing : .rasterization
         }
         invalidateAccelerationStructure()
+        resetAccumulation()
     }
     
     private func invalidateAccelerationStructure() {
@@ -129,12 +135,23 @@ extension Renderer {
     }
 
     private func updateInput() {
-        let pressedKeys = pressedKeysProvider()
-        let isMPressed = pressedKeys.contains(46) // M
-        if isMPressed && !wasMPressed {
-            toggleRenderMode()
+        // Input now handled asynchronously via handleKeyPress
+    }
+    
+    func handleKeyPress(_ keyCode: UInt16) {
+        if keyCode == 46 { // M key
+            let wasPressed = mKeyPressed.read { $0 }
+            if !wasPressed {
+                mKeyPressed.write { $0 = true }
+                toggleRenderMode()
+            }
         }
-        wasMPressed = isMPressed
+    }
+    
+    func handleKeyRelease(_ keyCode: UInt16) {
+        if keyCode == 46 { // M key
+            mKeyPressed.write { $0 = false }
+        }
     }
 }
 
@@ -527,6 +544,13 @@ extension Renderer {
             computeEncoder.setBytes(&lightDataArray, length: MemoryLayout<LightData>.stride * lightDataArray.count, index: 6)
         }
         computeEncoder.setBytes(&accumulatedSamples, length: MemoryLayout<UInt32>.stride, index: 7)
+        
+        var aoEnabledInt = aoEnabled ? UInt32(1) : UInt32(0)
+        var aoSamplesVar = aoSamples
+        var aoRadiusVar = aoRadius
+        computeEncoder.setBytes(&aoEnabledInt, length: MemoryLayout<UInt32>.stride, index: 8)
+        computeEncoder.setBytes(&aoSamplesVar, length: MemoryLayout<UInt32>.stride, index: 9)
+        computeEncoder.setBytes(&aoRadiusVar, length: MemoryLayout<Float>.stride, index: 10)
         
         let threadgroupSize = MTLSize(width: threadGroupSizeOneDimension, height: threadGroupSizeOneDimension, depth: 1) // TODO: make it configurable
         let threadgroups = MTLSize(
