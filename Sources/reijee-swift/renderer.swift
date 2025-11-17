@@ -42,6 +42,17 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     var aoSamples: UInt32 = 8
     var aoRadius: Float = 1.0
 
+    // Global Illumination settings
+    var giEnabled: Bool = false
+    var giSamples: UInt32 = 16
+    var giBounces: UInt32 = 2
+    var giIntensity: Float = 1.0
+    var giFalloff: Float = 2.0 // Added GI falloff parameter
+    var giMaxDistance: Float = 1000.0
+    var giMinDistance: Float = 0.001
+    var giBias: Float = 0.001
+    var giSampleDistribution: [UInt8] = Array("cosine".utf8) // Options: "uniform", "cosine"
+
     init(_ device: MTLDevice, pressedKeysProvider: @escaping () -> Set<UInt16>, shiftProvider: @escaping () -> Bool) {
         self.device = device
         self.commandQueue = device.makeCommandQueue()!
@@ -551,6 +562,25 @@ extension Renderer {
         computeEncoder.setBytes(&aoEnabledInt, length: MemoryLayout<UInt32>.stride, index: 8)
         computeEncoder.setBytes(&aoSamplesVar, length: MemoryLayout<UInt32>.stride, index: 9)
         computeEncoder.setBytes(&aoRadiusVar, length: MemoryLayout<Float>.stride, index: 10)
+        
+        var giEnabledInt = giEnabled ? UInt32(1) : UInt32(0)
+        var giSamplesVar = giSamples
+        var giBouncesVar = giBounces
+        var giIntensityVar = giIntensity
+        var giFalloffVar = giFalloff // New falloff variable
+        var giMaxDistanceVar = giMaxDistance
+        var giMinDistanceVar = giMinDistance
+        var giBiasVar = giBias
+        var giSampleDistributionVar = giSampleDistribution
+        computeEncoder.setBytes(&giEnabledInt, length: MemoryLayout<UInt32>.stride, index: 11)
+        computeEncoder.setBytes(&giSamplesVar, length: MemoryLayout<UInt32>.stride, index: 12)
+        computeEncoder.setBytes(&giBouncesVar, length: MemoryLayout<UInt32>.stride, index: 13)
+        computeEncoder.setBytes(&giIntensityVar, length: MemoryLayout<Float>.stride, index: 14)
+        computeEncoder.setBytes(&giFalloffVar, length: MemoryLayout<Float>.stride, index: 15) // Set falloff variable
+        computeEncoder.setBytes(&giMaxDistanceVar, length: MemoryLayout<Float>.stride, index: 16)
+        computeEncoder.setBytes(&giMinDistanceVar, length: MemoryLayout<Float>.stride, index: 17)
+        computeEncoder.setBytes(&giBiasVar, length: MemoryLayout<Float>.stride, index: 18)
+        computeEncoder.setBytes(&giSampleDistributionVar, length: MemoryLayout<String>.stride, index: 19)
         
         let threadgroupSize = MTLSize(width: threadGroupSizeOneDimension, height: threadGroupSizeOneDimension, depth: 1) // TODO: make it configurable
         let threadgroups = MTLSize(

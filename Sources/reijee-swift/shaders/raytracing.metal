@@ -107,6 +107,15 @@ kernel void raytrace(
     constant uint& aoEnabled [[buffer(8)]],
     constant uint& aoSamples [[buffer(9)]],
     constant float& aoRadius [[buffer(10)]],
+    constant uint& giEnabled [[buffer(11)]],
+    constant uint& giSamples [[buffer(12)]],
+    constant uint& giBounces [[buffer(13)]],
+    constant float& giIntensity [[buffer(14)]],
+    constant float& giFalloff [[buffer(15)]],
+    constant float& giMaxDistance [[buffer(16)]],
+    constant float& giMinDistance [[buffer(17)]],
+    constant float& giBias [[buffer(18)]],
+    constant uint8_t* giSampleDistribution [[buffer(19)]],
     uint2 tid [[thread_position_in_grid]]
 ) {
     if (tid.x >= output.get_width() || tid.y >= output.get_height()) {
@@ -283,6 +292,57 @@ kernel void raytrace(
         }
         
         color = vertexColor * totalLight * ao;
+        
+        // Global Illumination calculation
+        if (giEnabled == 1) {
+            float3 giColor = float3(0.0);
+            float3 bounceOrigin = hitPos;
+            float3 bounceDirection = r.direction;
+
+            for (uint bounce = 0; bounce < giBounces; bounce++) {
+                ray giRay;
+                giRay.origin = bounceOrigin + normal * 0.001;
+                giRay.direction = bounceDirection;
+                giRay.min_distance = 0.001;
+                giRay.max_distance = 1000.0;
+
+                intersection_result<triangle_data> giIntersection = i.intersect(giRay, accelStructure);
+
+                if (giIntersection.type == intersection_type::triangle) {
+                    float2 giBary = giIntersection.triangle_barycentric_coord;
+                    float giU = giBary.x;
+                    float giV = giBary.y;
+                    float giW = 1.0 - giU - giV;
+
+                    uint giPrimitiveIndex = giIntersection.primitive_id;
+                    uint giI0 = indices[giPrimitiveIndex * 3 + 0];
+                    uint giI1 = indices[giPrimitiveIndex * 3 + 1];
+                    uint giI2 = indices[giPrimitiveIndex * 3 + 2];
+
+                    Vertex giV0 = vertices[giI0];
+                    Vertex giV1 = vertices[giI1];
+                    Vertex giV2 = vertices[giI2];
+
+                    float3 giVertexColor = (giV0.color.rgb * giW + giV1.color.rgb * giU + giV2.color.rgb * giV);
+                    float3 giNormal = computeNormal(giV0.position, giV1.position, giV2.position);
+
+                    if (dot(giNormal, -giRay.direction) < 0.0) {
+                        giNormal = -giNormal;
+                    }
+
+                    // Apply GI falloff
+                    float distanceFactor = pow(max(0.1, 1.0 / length(bounceDirection)), giFalloff);
+                    giColor += giVertexColor * giIntensity * distanceFactor / float(giBounces);
+
+                    bounceOrigin = giRay.origin + giRay.direction * giIntersection.distance;
+                    bounceDirection = randomCosineHemisphere(seed, giNormal);
+                } else {
+                    break;
+                }
+            }
+
+            color += giColor;
+        }
     }
         
         accumulatedColor += color;
