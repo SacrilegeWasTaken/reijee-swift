@@ -58,6 +58,10 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     private let materialLibrary = MaterialLibrary()
     private var triangleMaterialIndexBuffer: MTLBuffer?
     private var materialsBuffer: MTLBuffer?
+    
+    // Environment / HDRI cache
+    private var envTextures: [String: MTLTexture] = [:]
+    private var textureLoader: MTKTextureLoader!
 
 
     init(_ device: MTLDevice, pressedKeysProvider: @escaping () -> Set<UInt16>, shiftProvider: @escaping () -> Bool) {
@@ -66,6 +70,7 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
         self.scene = Scene()
         self.camera = Camera()
         self.shaderLibrary = ShaderLibrary(device: device)
+        self.textureLoader = MTKTextureLoader(device: device)
         self.pressedKeysProvider = pressedKeysProvider
         self.shiftProvider = shiftProvider
 
@@ -501,6 +506,65 @@ extension Renderer {
         commandBuffer.commit()
     }
 
+    // Load or return cached environment (HDRI) texture by name. Tries bundle/resource then relative Assets/ path.
+    private func getEnvironmentTexture(_ name: String) -> MTLTexture? {
+        if let tex = envTextures[name] {
+            return tex
+        }
+
+        // If the provided name is already an absolute path or exists as-is, try it first
+        func tryLoad(_ url: URL) -> MTLTexture? {
+            if FileManager.default.fileExists(atPath: url.path) {
+                do {
+                    let options: [MTKTextureLoader.Option: Any] = [
+                        .SRGB: false,
+                        .generateMipmaps: NSNumber(value: true)
+                    ]
+                    let tex = try textureLoader.newTexture(URL: url, options: options)
+                    print("[Renderer] Loaded environment texture \(url.path)")
+                    envTextures[name] = tex
+                    return tex
+                } catch {
+                    print("[Renderer] Failed to load environment texture at \(url): \(error)")
+                }
+            }
+            return nil
+        }
+
+        // Direct path (absolute or relative) provided
+        if name.hasPrefix("file://"), let fileURL = URL(string: name) {
+            if let tex = tryLoad(fileURL) { return tex }
+        }
+
+        if FileManager.default.fileExists(atPath: name) {
+            let fileURL = URL(fileURLWithPath: name).standardizedFileURL
+            if let tex = tryLoad(fileURL) { return tex }
+        }
+
+        // Build candidate URLs: bundle resource and project Assets
+        var urlCandidates: [URL] = []
+        if !name.hasPrefix("/") {
+            if let res = Bundle.main.resourceURL {
+                urlCandidates.append(res.appendingPathComponent(name))
+            }
+            let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            urlCandidates.append(cwd.appendingPathComponent("Assets").appendingPathComponent(name))
+        } else {
+            // If name is absolute but earlier check failed, try standardized variant
+            let std = URL(fileURLWithPath: name).standardizedFileURL
+            urlCandidates.append(std)
+        }
+
+        for url in urlCandidates {
+            if let tex = tryLoad(url) { return tex }
+        }
+
+        // Debug: print tried paths
+        print("[Renderer] Environment texture not found for name '\(name)'. Tried:")
+        for url in urlCandidates { print("  - \(url.path)") }
+        return nil
+    }
+
     func drawRaytracing(in view: MTKView, drawable: MTLDrawable, descriptor: MTLRenderPassDescriptor) {
         if accelerationStructure == nil && !asBuilding {
             buildAccelerationStructure()
@@ -649,6 +713,32 @@ extension Renderer {
         computeEncoder.setBytes(&giMinDistanceVar, length: MemoryLayout<Float>.stride, index: 17)
         computeEncoder.setBytes(&giBiasVar, length: MemoryLayout<Float>.stride, index: 18)
         computeEncoder.setBytes(&giSampleDistributionVar, length: MemoryLayout<String>.stride, index: 19)
+
+        // Environment (HDRI) setup: find first DomeLight and bind its texture + params
+        var envPresent: UInt32 = 0
+        var envIntensityVar: Float = 1.0
+        var envRotationVar = SIMD3<Float>(0,0,0)
+        var envTintVar = SIMD3<Float>(1,1,1)
+        var envTexture: MTLTexture? = nil
+        for light in lights {
+            if let dome = light as? DomeLight {
+                envIntensityVar = dome.getIntensity()
+                envRotationVar = dome.getRotation()
+                envTintVar = dome.getTint()
+                envTexture = getEnvironmentTexture(dome.getTextureName())
+                if envTexture != nil {
+                    envPresent = 1
+                }
+                break
+            }
+        }
+        if let envTexture = envTexture {
+            computeEncoder.setTexture(envTexture, index: 2)
+        }
+        computeEncoder.setBytes(&envPresent, length: MemoryLayout<UInt32>.stride, index: 23)
+        computeEncoder.setBytes(&envIntensityVar, length: MemoryLayout<Float>.stride, index: 24)
+        computeEncoder.setBytes(&envRotationVar, length: MemoryLayout<SIMD3<Float>>.stride, index: 25)
+        computeEncoder.setBytes(&envTintVar, length: MemoryLayout<SIMD3<Float>>.stride, index: 26)
 
         // Materials buffers (20+)
         computeEncoder.setBytes(&materialCount, length: MemoryLayout<UInt32>.stride, index: 20)

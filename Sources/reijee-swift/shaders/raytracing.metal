@@ -85,6 +85,41 @@ float3 computeNormal(float3 v0, float3 v1, float3 v2) {
     return normalize(cross(e1, e2));
 }
 
+// Environment sampling helper (equirectangular -> direction) with full 3-axis rotation
+constexpr sampler envSampler(coord::normalized, address::repeat, filter::linear);
+inline float3 rotateDirection(float3 dir, float3 euler) {
+    // euler: (pitch (X), yaw (Y), roll (Z))
+    float cp = cos(euler.x); float sp = sin(euler.x);
+    float cy = cos(euler.y); float sy = sin(euler.y);
+    float cr = cos(euler.z); float sr = sin(euler.z);
+
+    float3x3 Rx = float3x3(
+        float3(1, 0, 0),
+        float3(0, cp, -sp),
+        float3(0, sp, cp)
+    );
+    float3x3 Ry = float3x3(
+        float3(cy, 0, sy),
+        float3(0, 1, 0),
+        float3(-sy, 0, cy)
+    );
+    float3x3 Rz = float3x3(
+        float3(cr, -sr, 0),
+        float3(sr, cr, 0),
+        float3(0, 0, 1)
+    );
+    // Compose rotation: roll * pitch * yaw
+    float3x3 R = Rz * Rx * Ry;
+    return normalize(R * dir);
+}
+
+inline float3 sampleEquirectangular(texture2d<float, access::sample> tex, float3 dir, float3 rotation) {
+    float3 rdir = rotateDirection(dir, rotation);
+    float u = 0.5 + atan2(rdir.z, rdir.x) / (2.0 * 3.14159265);
+    float v = 0.5 - asin(clamp(rdir.y, -1.0, 1.0)) / 3.14159265;
+    return tex.sample(envSampler, float2(u, v)).rgb;
+}
+
 // Better RNG using PCG hash
 uint pcg_hash(uint seed) {
     uint state = seed * 747796405u + 2891336453u;
@@ -167,6 +202,7 @@ bool traceShadow(ray r, primitive_acceleration_structure accelStructure, float m
 kernel void raytrace(
     texture2d<float, access::write> output [[texture(0)]],
     texture2d<float, access::read_write> accumulation [[texture(1)]],
+    texture2d<float, access::sample> envTexture [[texture(2)]],
     constant CameraData& camera [[buffer(0)]],
     primitive_acceleration_structure accelStructure [[buffer(1)]],
     constant Vertex* vertices [[buffer(2)]],
@@ -190,6 +226,10 @@ kernel void raytrace(
     constant uint& materialCount [[buffer(20)]],
     const device PBRMaterial* materials [[buffer(21)]],
     const device uint* triMaterialIndices [[buffer(22)]],
+    constant uint& envPresent [[buffer(23)]],
+    constant float& envIntensity [[buffer(24)]],
+    constant float3& envRotation [[buffer(25)]],
+    constant float3& envTint [[buffer(26)]],
     uint2 tid [[thread_position_in_grid]]
 ) {
     if (tid.x >= output.get_width() || tid.y >= output.get_height()) {
@@ -225,8 +265,9 @@ kernel void raytrace(
         intersection_result<triangle_data> intersection = i.intersect(r, accelStructure);
         
         float3 color = float3(0.0);
-    
-    if (intersection.type == intersection_type::triangle) {
+
+        if (intersection.type == intersection_type::triangle) {
+        
         float2 bary = intersection.triangle_barycentric_coord;
         float u = bary.x;
         float v = bary.y;
@@ -442,6 +483,13 @@ kernel void raytrace(
             }
         }
         
+        // Add environment (approximate IBL): diffuse + specular contribution
+        if (envPresent == 1) {
+            float3 envN = sampleEquirectangular(envTexture, normal, envRotation) * envIntensity * envTint;
+            float3 envR = sampleEquirectangular(envTexture, reflect(-V, normal), envRotation) * envIntensity * envTint;
+            totalLight += envN * (1.0 - metallic) * 0.5 + envR * F0 * 0.5;
+        }
+
         // Base shading result from PBR (already includes emissive) with AO
         color = totalLight * ao;
         
@@ -595,7 +643,13 @@ kernel void raytrace(
             giColor = (giColor / float(pathSamples)) * giIntensity;
             color += giColor;
         }
-    }
+        } else {
+            if (envPresent == 1) {
+                color = sampleEquirectangular(envTexture, r.direction, envRotation) * envIntensity * envTint;
+            } else {
+                color = float3(0.0);
+            }
+        }
         
         accumulatedColor += color;
     }

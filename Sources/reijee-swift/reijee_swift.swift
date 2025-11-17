@@ -150,7 +150,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 softShadows: true
             )
             await renderer.addLight(name: "areaLight", light: areaLight)
-            
+
+            let domeLight = DomeLight(
+                rotation: SIMD3<Float>(0, 0, 0),
+                intensity: 1.0,
+                tint: SIMD3<Float>(1, 1, 1),
+                textureName: "modern_evening_street_4k.exr"
+            )
+            await renderer.addLight(name: "domeLight", light: domeLight)
             // Запускаем анимацию в главном потоке
             await MainActor.run {
                 self.animationTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [renderer] _ in

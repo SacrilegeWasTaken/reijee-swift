@@ -169,6 +169,14 @@ extension Scene {
     }
 }
 
+// Convenience to add a Dome (HDRI) light
+extension Scene {
+    func addDomeLight(name: String, textureName: String, intensity: Float = 1.0, rotation: SIMD3<Float> = SIMD3<Float>(0,0,0), tint: SIMD3<Float> = SIMD3<Float>(1,1,1)) {
+        let dome = DomeLight(textureName: textureName, intensity: intensity, rotation: rotation, tint: tint)
+        addLight(name: name, dome)
+    }
+}
+
 
 // Objects
 extension Scene {

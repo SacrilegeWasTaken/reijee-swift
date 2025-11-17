@@ -145,3 +145,60 @@ struct AreaLight: Light {
         size *= factor
     }
 }
+
+// Dome / HDRI environment light
+struct DomeLight: Light {
+    // Euler rotation in radians (pitch, yaw, roll) - rotation applied to environment sampling
+    private var rotation: SIMD3<Float>
+    private var intensity: Float
+    // Tint multiplies HDRI color; useful for subtle color shifts. Default is white (no tint).
+    private var tint: SIMD3<Float>
+    private var textureName: String
+
+    init(textureName: String, intensity: Float = 1.0, rotation: SIMD3<Float> = SIMD3<Float>(0,0,0), tint: SIMD3<Float> = SIMD3<Float>(1,1,1)) {
+        self.textureName = textureName
+        self.intensity = intensity
+        self.rotation = rotation
+        self.tint = tint
+    }
+
+    // Preferred initializer (matches API used in app): rotation, intensity, tint, textureName
+    init(rotation: SIMD3<Float>, intensity: Float = 1.0, tint: SIMD3<Float> = SIMD3<Float>(1,1,1), textureName: String) {
+        self.textureName = textureName
+        self.intensity = intensity
+        self.rotation = rotation
+        self.tint = tint
+    }
+
+    func toLightData() -> LightData {
+        // Environment lights are represented with type dome but don't provide positional lighting via LightData.
+        return LightData(
+            position: SIMD3<Float>(0,0,0),
+            type: LightType.dome.rawValue,
+            color: tint,
+            intensity: intensity,
+            direction: SIMD3<Float>(0, -1, 0),
+            size: SIMD2<Float>(0,0),
+            radius: 0,
+            focus: 0,
+            softShadows: 0,
+            shadowSamples: 0,
+            shadowRadius: 0,
+            _padding: 0
+        )
+    }
+
+    func getTextureName() -> String { textureName }
+    func getRotation() -> SIMD3<Float> { rotation }
+    func getIntensity() -> Float { intensity }
+    func getTint() -> SIMD3<Float> { tint }
+
+    mutating func translate(_ delta: SIMD3<Float>) {}
+    mutating func rotate(_ angle: Float, axis: SIMD3<Float>) {
+        // Rotate around given axis by adding to euler angles (simple approach)
+        if axis.x == 1 { rotation.x += angle }
+        if axis.y == 1 { rotation.y += angle }
+        if axis.z == 1 { rotation.z += angle }
+    }
+    mutating func scale(_ factor: Float) {}
+}
