@@ -20,6 +20,7 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
 
     private var renderMode = RwLock<RenderMode>(.rasterization)
     private var mKeyPressed = RwLock<Bool>(false)
+    private var gKeyPressed = RwLock<Bool>(false)
 
     // Raytrace
     private var accelerationStructure: MTLAccelerationStructure?
@@ -43,11 +44,11 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     private var aoRadius: Float = 1.0
  
     // Global Illumination settings
-    private var giEnabled: Bool = false
+    private var giEnabled: Bool = true
     private var giSamples: UInt32 = 16
     private var giBounces: UInt32 = 5
     private var giIntensity: Float = 1.0
-    private var giFalloff: Float = 2.0 // Added GI falloff parameter
+    private var giFalloff: Float = 1.0 // Added GI falloff parameter
     private var giMaxDistance: Float = 1000.0
     private var giMinDistance: Float = 0.001
     private var giBias: Float = 0.001
@@ -138,6 +139,11 @@ extension Renderer {
         resetAccumulation()
     }
     
+    func toggleGI() {
+        giEnabled.toggle()
+        resetAccumulation()
+    }
+    
     private func invalidateAccelerationStructure() {
         accelerationStructure = nil
         combinedVertexBuffer = nil
@@ -158,11 +164,21 @@ extension Renderer {
                 toggleRenderMode()
             }
         }
+        if keyCode == 5 { // G key
+            let wasPressed = gKeyPressed.read { $0 }
+            if !wasPressed {
+                gKeyPressed.write { $0 = true }
+                toggleGI()
+            }
+        }
     }
     
     func handleKeyRelease(_ keyCode: UInt16) {
         if keyCode == 46 { // M key
             mKeyPressed.write { $0 = false }
+        }
+        if keyCode == 5 { // G key
+            gKeyPressed.write { $0 = false }
         }
     }
 }

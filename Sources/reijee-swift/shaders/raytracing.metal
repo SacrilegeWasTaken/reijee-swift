@@ -93,6 +93,53 @@ bool traceShadow(ray r, primitive_acceleration_structure accelStructure, float m
     return shadowHit.type != intersection_type::none;
 }
 
+// Simple direct lighting with hard shadows for GI hits
+float3 computeDirectLightingGI(
+    float3 hitPos,
+    float3 normal,
+    constant LightData* lights,
+    uint lightCount,
+    primitive_acceleration_structure accelStructure
+) {
+    float3 totalLight = float3(0.0);
+    for (uint lightIdx = 0; lightIdx < lightCount; lightIdx++) {
+        LightData light = lights[lightIdx];
+        float3 lightPos = light.position;
+        float3 lightColor = light.color * light.intensity;
+        float3 toLight = lightPos - hitPos;
+        float distToLight = length(toLight);
+        float3 lightDir = toLight / max(distToLight, 1e-4);
+
+        if (light.type == 1) {
+            float3 areaLightDir = normalize(light.direction);
+            float directionDot = dot(-lightDir, areaLightDir);
+            if (directionDot <= 0.0) {
+                continue;
+            }
+            if (light.focus > 0.0) {
+                float focusFalloff = pow(max(0.0, directionDot), light.focus);
+                lightColor *= focusFalloff;
+            }
+        }
+
+        float diffuse = max(0.0, dot(normal, lightDir));
+        if (diffuse <= 0.0) continue;
+
+        float attenuation = 1.0 / max(distToLight * distToLight, 1e-4);
+
+        float bias = max(0.001, 0.005 * (1.0 - abs(dot(normal, lightDir))));
+        ray shadowRay;
+        shadowRay.origin = hitPos + normal * bias;
+        shadowRay.direction = lightDir;
+        shadowRay.min_distance = bias;
+        shadowRay.max_distance = max(distToLight - bias, 0.0);
+        float visibility = traceShadow(shadowRay, accelStructure, shadowRay.max_distance) ? 0.0 : 1.0;
+
+        totalLight += diffuse * visibility * lightColor * attenuation;
+    }
+    return totalLight;
+}
+
 kernel void raytrace(
     texture2d<float, access::write> output [[texture(0)]],
     texture2d<float, access::read_write> accumulation [[texture(1)]],
@@ -293,22 +340,34 @@ kernel void raytrace(
         
         color = vertexColor * totalLight * ao;
         
-        // Global Illumination calculation
+        // Global Illumination: path tracing style with throughput and direct lighting at bounces
         if (giEnabled == 1) {
             float3 giColor = float3(0.0);
-            float3 bounceOrigin = hitPos;
-            float3 bounceDirection = r.direction;
+            uint pathSamples = max(1u, giSamples);
+            uint giBaseSeed = pcg_hash(tid.x + tid.y * output.get_width() + sample * 33331u ^ camera.frameIndex * 0x9E3779B9u);
 
-            for (uint bounce = 0; bounce < giBounces; bounce++) {
-                ray giRay;
-                giRay.origin = bounceOrigin + normal * 0.001;
-                giRay.direction = bounceDirection;
-                giRay.min_distance = 0.001;
-                giRay.max_distance = 1000.0;
+            for (uint s = 0; s < pathSamples; s++) {
+                uint giSeed = pcg_hash(giBaseSeed + s * 0x85EBCA6Bu);
+                float3 throughput = float3(1.0);
+                float3 bounceOrigin = hitPos;
+                float3 bounceNormal = normal;
 
-                intersection_result<triangle_data> giIntersection = i.intersect(giRay, accelStructure);
+                for (uint bounce = 0; bounce < giBounces; bounce++) {
+                    // Sample next direction (cosine-weighted). For Lambertian, BRDF/pdf cancels out.
+                    float3 bounceDirection = randomCosineHemisphere(giSeed, bounceNormal);
+                    giSeed = pcg_hash(giSeed + 0x27D4EB2Du + bounce);
 
-                if (giIntersection.type == intersection_type::triangle) {
+                    ray giRay;
+                    giRay.origin = bounceOrigin + bounceNormal * giBias;
+                    giRay.direction = bounceDirection;
+                    giRay.min_distance = giMinDistance;
+                    giRay.max_distance = giMaxDistance;
+
+                    intersection_result<triangle_data> giIntersection = i.intersect(giRay, accelStructure);
+                    if (giIntersection.type != intersection_type::triangle) {
+                        break;
+                    }
+
                     float2 giBary = giIntersection.triangle_barycentric_coord;
                     float giU = giBary.x;
                     float giV = giBary.y;
@@ -323,24 +382,40 @@ kernel void raytrace(
                     Vertex giV1 = vertices[giI1];
                     Vertex giV2 = vertices[giI2];
 
-                    float3 giVertexColor = (giV0.color.rgb * giW + giV1.color.rgb * giU + giV2.color.rgb * giV);
+                    float3 giAlbedo = (giV0.color.rgb * giW + giV1.color.rgb * giU + giV2.color.rgb * giV);
                     float3 giNormal = computeNormal(giV0.position, giV1.position, giV2.position);
-
                     if (dot(giNormal, -giRay.direction) < 0.0) {
                         giNormal = -giNormal;
                     }
 
-                    // Apply GI falloff
-                    float distanceFactor = pow(max(0.1, 1.0 / length(bounceDirection)), giFalloff);
-                    giColor += giVertexColor * giIntensity * distanceFactor / float(giBounces);
+                    float3 giHitPos = giRay.origin + giRay.direction * giIntersection.distance;
 
-                    bounceOrigin = giRay.origin + giRay.direction * giIntersection.distance;
-                    bounceDirection = randomCosineHemisphere(seed, giNormal);
-                } else {
-                    break;
+                    // Accumulate direct lighting at this bounce using BRDF (Lambert: albedo/pi)
+                    const float INV_PI = 0.31830988618; // 1/pi
+                    float3 albedoClamped = clamp(giAlbedo, 0.0, 1.0);
+                    float3 directLight = computeDirectLightingGI(giHitPos, giNormal, lights, lightCount, accelStructure);
+                    giColor += throughput * (albedoClamped * INV_PI) * directLight;
+
+                    // Update throughput for next bounce (Lambertian BRDF expectation under cosine sampling)
+                    throughput *= (albedoClamped * INV_PI);
+                    throughput = clamp(throughput, float3(0.0), float3(10.0));
+
+                    // Russian roulette after a few bounces
+                    if (bounce >= 2) {
+                        float p = clamp(max(throughput.x, max(throughput.y, throughput.z)), 0.05, 0.9);
+                        if (random(giSeed) > p) {
+                            break;
+                        }
+                        throughput /= p;
+                        giSeed = pcg_hash(giSeed + 0x165667B1u);
+                    }
+
+                    bounceOrigin = giHitPos;
+                    bounceNormal = giNormal;
                 }
             }
 
+            giColor = (giColor / float(pathSamples)) * giIntensity;
             color += giColor;
         }
     }
