@@ -112,7 +112,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             cube2.translate(SIMD3<Float>(-3,0.0,0.0))
             await renderer.addObject(objectName: "cube", geometry: cube, pipelineName: "coloredTriangle")
             await renderer.addObject(objectName: "cube2", geometry: cube2, pipelineName: "coloredTriangle")
-            let grid = Grid()
+            let grid = Grid(size: 5, divisions: 15)
             await renderer.addObject(objectName: "grid", geometry: grid, pipelineName: "gridUnlimited")
 
             // Materials: create a mirror-like Gold and assign to cube2

@@ -6,6 +6,92 @@ enum RenderMode {
     case raytracing
 }
 
+struct SamplingSettings {
+    enum Preset {
+        case draft
+        case preview
+        case final
+    }
+
+    var samplesPerPixel: Int
+    var maxAccumulatedSamples: UInt32
+
+    var aoEnabled: Bool
+    var aoSamples: UInt32
+    var aoRadius: Float
+
+    var giEnabled: Bool
+    var giSamples: UInt32
+    var giBounces: UInt32
+    var giIntensity: Float
+    var giFalloff: Float
+    var giMaxDistance: Float
+    var giMinDistance: Float
+    var giBias: Float
+
+    var specularEnabled: Bool
+    var specularBounces: UInt32
+
+    static func preset(_ p: Preset) -> SamplingSettings {
+        switch p {
+        case .draft:
+            return SamplingSettings(
+                samplesPerPixel: 1,
+                maxAccumulatedSamples: 64,
+                aoEnabled: false,
+                aoSamples: 2,
+                aoRadius: 1.0,
+                giEnabled: false,
+                giSamples: 1,
+                giBounces: 1,
+                giIntensity: 0.33,
+                giFalloff: 1.0,
+                giMaxDistance: 1000,
+                giMinDistance: 0.001,
+                giBias: 0.001,
+                specularEnabled: false,
+                specularBounces: 1
+            )
+        case .preview:
+            return SamplingSettings(
+                samplesPerPixel: 2,
+                maxAccumulatedSamples: 256,
+                aoEnabled: true,
+                aoSamples: 4,
+                aoRadius: 1.0,
+                giEnabled: true,
+                giSamples: 4,
+                giBounces: 2,
+                giIntensity: 0.33,
+                giFalloff: 1.0,
+                giMaxDistance: 1000,
+                giMinDistance: 0.001,
+                giBias: 0.001,
+                specularEnabled: true,
+                specularBounces: 2
+            )
+        case .final:
+            return SamplingSettings(
+                samplesPerPixel: 4,
+                maxAccumulatedSamples: 2048,
+                aoEnabled: true,
+                aoSamples: 16,
+                aoRadius: 1.0,
+                giEnabled: true,
+                giSamples: 8,
+                giBounces: 6,
+                giIntensity: 0.33,
+                giFalloff: 1.0,
+                giMaxDistance: 1000,
+                giMinDistance: 0.001,
+                giBias: 0.001,
+                specularEnabled: true,
+                specularBounces: 8
+            )
+        }
+    }
+}
+
 class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     fileprivate let device: MTLDevice 
     fileprivate let commandQueue: MTLCommandQueue
@@ -31,12 +117,17 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     private var samplesPerPixel: Int = 1
     private var threadGroupSizeOneDimension: Int = 16
     private var frameIndex: UInt32 = 0
+
+    // Centralized sampling settings. Adjust these values to tune quality/speed.
+
+    // Current sampling settings (centralized). Start with preview preset by default.
+    private var sampling: SamplingSettings = SamplingSettings.preset(.preview)
     
     // Progressive rendering
     private var accumulationTexture: MTLTexture?
     private var accumulatedSamples: UInt32 = 0
     private var lastCameraData: CameraData?
-    private let maxAccumulatedSamples: UInt32 = 1024
+    private var maxAccumulatedSamples: UInt32 = 1024
     
     // AO settings
     private var aoEnabled: Bool = true
@@ -83,6 +174,25 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
         depthDescriptor.isDepthWriteEnabled = true
         self.depthStencilState = device.makeDepthStencilState(descriptor: depthDescriptor)!
         super.init()
+
+        // Initialize runtime fields from centralized sampling settings
+        self.samplesPerPixel = sampling.samplesPerPixel
+        self.maxAccumulatedSamples = sampling.maxAccumulatedSamples
+        self.aoEnabled = sampling.aoEnabled
+        self.aoSamples = sampling.aoSamples
+        self.aoRadius = sampling.aoRadius
+
+        self.giEnabled = sampling.giEnabled
+        self.giSamples = sampling.giSamples
+        self.giBounces = sampling.giBounces
+        self.giIntensity = sampling.giIntensity
+        self.giFalloff = sampling.giFalloff
+        self.giMaxDistance = sampling.giMaxDistance
+        self.giMinDistance = sampling.giMinDistance
+        self.giBias = sampling.giBias
+
+        self.specularEnabled = sampling.specularEnabled
+        self.specularBounces = sampling.specularBounces
     }
 
     func registerLibrary(
