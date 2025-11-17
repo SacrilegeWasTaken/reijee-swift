@@ -127,7 +127,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let areaLight = AreaLight(
                 position: SIMD3<Float>(5, 1, 0), 
                 color: SIMD3<Float>(1, 0.0, 0.0), 
-                intensity: 15,
+                intensity: 5,
                 size: SIMD2<Float>(2, 2), 
                 direction: SIMD3<Float>(-1, 0, 0), 
                 focus: 2.0, 

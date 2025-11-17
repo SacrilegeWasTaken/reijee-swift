@@ -58,6 +58,31 @@ float3 random3(uint seed) {
     return float3(random(seed), random(seed + 1u), random(seed + 2u));
 }
 
+// Stateful PCG RNG for decorrelated streams
+inline uint pcg_next(thread uint &state) {
+    state = state * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+inline float rand01(thread uint &state) {
+    return float(pcg_next(state)) * (1.0 / 4294967296.0);
+}
+
+inline float2 rand2(thread uint &state) {
+    return float2(rand01(state), rand01(state));
+}
+
+// Scrambled radical inverse (base-2 Van der Corput)
+inline float radicalInverse_VdC(uint bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10; // / 2^32
+}
+
 // Uniform sampling on unit sphere
 float3 randomSpherePoint(uint seed) {
     float2 u = random2(seed);
@@ -126,7 +151,8 @@ kernel void raytrace(
     
     for (uint sample = 0; sample < samplesPerPixel; sample++) {
         uint seed = tid.x + tid.y * output.get_width() + sample * 12345u + camera.frameIndex * 67890u;
-        float2 jitter = random2(seed) - 0.5;
+        thread uint rng = pcg_hash(seed);
+        float2 jitter = rand2(rng) - 0.5;
         
         float2 uv = (float2(tid) + 0.5 + jitter) / float2(output.get_width(), output.get_height());
         uv = uv * 2.0 - 1.0;
@@ -217,8 +243,13 @@ kernel void raytrace(
                 float3 accum = float3(0.0);
 
                 for (uint s = 0; s < samples; s++) {
-                    uint lseed = tid.x + tid.y * output.get_width() + s * 9876u + lightIdx * 5432u + camera.frameIndex * 11111u + sample * 22222u;
-                    float2 u = random2(pcg_hash(lseed)) - 0.5;
+                    // Hammersley + Cranley-Patterson rotation for low-pattern sampling on the rectangle
+                    uint scramble = pcg_hash(tid.x * 0x9E3779B9u ^ tid.y * 0x85EBCA6Bu ^ camera.frameIndex * 0x27D4EB2Du ^ lightIdx * 0x165667B1u);
+                    float jitter = rand01(rng);
+                    float u0 = (float(s) + jitter) / float(samples);
+                    float u1 = radicalInverse_VdC(s ^ scramble);
+                    float2 shift = rand2(rng);
+                    float2 u = fract(float2(u0, u1) + shift) - 0.5;
 
                     float3 samplePos = lightPos + lightRight * (u.x * light.size.x) + lightUp * (u.y * light.size.y);
 
@@ -250,7 +281,9 @@ kernel void raytrace(
                     float visibility = traceShadow(shadowRay, accelStructure, shadowRay.max_distance) ? 0.0 : 1.0;
 
                     float attenuation = 1.0 / (distToSample * distToSample);
-                    accum += nl * nl_light * visibility * lightColor * attenuation;
+                    // Uniform area sampling requires scaling by the light's area
+                    float area = max(1e-6, light.size.x * light.size.y);
+                    accum += nl * nl_light * visibility * lightColor * attenuation * area;
                 }
 
                 totalLight += accum / float(samples);
@@ -384,8 +417,11 @@ kernel void raytrace(
 
                         bool validLightSample = true;
                         if (light.type == 1) {
-                            // Sample a point on the area light rectangle
-                            float2 u = random2(giSeed) - 0.5;
+                            // Sample a point on the area light rectangle using scrambled Hammersley + CP rotation
+                            uint scramble = pcg_hash(giSeed ^ lightIdx * 0x9E3779B9u ^ camera.frameIndex * 0x85EBCA6Bu);
+                            float u0 = fract((float(s) + random(giSeed)) / max(1.0, float(pathSamples)) + random(giSeed + 17u));
+                            float u1 = radicalInverse_VdC((s % max(1u, pathSamples)) ^ scramble);
+                            float2 u = float2(u0, u1) - 0.5;
                             giSeed = pcg_hash(giSeed + 0x9E3779B9u);
                             float3 areaDir = normalize(light.direction);
                             float3 lightRight = normalize(cross(areaDir, float3(0, 1, 0)));
@@ -429,7 +465,8 @@ kernel void raytrace(
                                 if (light.type == 1) {
                                     float3 areaDirLocal = normalize(light.direction);
                                     float nl_light = max(0.0, dot(-lightDirSample, areaDirLocal));
-                                    lightColor *= nl_light;
+                                    float area = max(1e-6, light.size.x * light.size.y);
+                                    lightColor *= nl_light * area;
                                 }
 
                                 float3 contrib = (albedoClamped * INV_PI) * (nl * visibility) * lightColor * attenuation;
