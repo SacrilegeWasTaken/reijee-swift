@@ -114,11 +114,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             await renderer.addObject(objectName: "cube2", geometry: cube2, pipelineName: "coloredTriangle")
             let grid = Grid()
             await renderer.addObject(objectName: "grid", geometry: grid, pipelineName: "gridUnlimited")
+
+            // Materials: create a mirror-like Gold and assign to cube2
+            let gold = PBRMaterial(
+                baseColor: SIMD3<Float>(1.000, 0.766, 0.336),
+                metallic: 1.0,
+                roughness: 0.05,
+                specular: 0.5,
+                ior: 0.47,
+                transmission: 0.0,
+                clearcoat: 0.0,
+                clearcoatRoughness: 0.1,
+                emissiveColor: SIMD3<Float>(0, 0, 0),
+                emissiveIntensity: 0.0
+            )
+            let goldIndex = renderer.addMaterial(gold)
+            await renderer.setObjectMaterial(objectName: "cube2", materialIndex: goldIndex)
             
             let pointLight = PointLight(
                 position: SIMD3<Float>(2, 5, 2),
                 color: SIMD3<Float>(0, 1, 0),
-                intensity: 1,
+                intensity: 3,
                 softShadows: true,
                 shadowConfig: ShadowConfig(samples: 8, radius: 0.2)
             )
@@ -127,7 +143,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let areaLight = AreaLight(
                 position: SIMD3<Float>(5, 1, 0), 
                 color: SIMD3<Float>(1, 0.0, 0.0), 
-                intensity: 5,
+                intensity: 15,
                 size: SIMD2<Float>(2, 2), 
                 direction: SIMD3<Float>(-1, 0, 0), 
                 focus: 2.0, 

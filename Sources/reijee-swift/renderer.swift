@@ -45,14 +45,19 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
  
     // Global Illumination settings
     private var giEnabled: Bool = true
-    private var giSamples: UInt32 = 16
-    private var giBounces: UInt32 = 5
-    private var giIntensity: Float = 1.0
+    private var giSamples: UInt32 = 4
+    private var giBounces: UInt32 = 4
+    private var giIntensity: Float = 0.33
     private var giFalloff: Float = 1.0 // Added GI falloff parameter
     private var giMaxDistance: Float = 1000.0
     private var giMinDistance: Float = 0.001
     private var giBias: Float = 0.001
     private var giSampleDistribution: [UInt8] = Array("cosine".utf8) // Options: "uniform", "cosine"
+
+    // Materials
+    private let materialLibrary = MaterialLibrary()
+    private var triangleMaterialIndexBuffer: MTLBuffer?
+    private var materialsBuffer: MTLBuffer?
 
 
     init(_ device: MTLDevice, pressedKeysProvider: @escaping () -> Set<UInt16>, shiftProvider: @escaping () -> Bool) {
@@ -253,6 +258,9 @@ extension Renderer {
             device: device
         )
 
+        // default material 0
+        object.setMaterialIndex(0)
+
         await scene.addObject(objectName: objectName, object)
         invalidateAccelerationStructure()
         resetAccumulation()
@@ -285,6 +293,25 @@ extension Renderer {
     
     func clear() async {
         await scene.clear()
+    }
+}
+
+// MATERIALS
+extension Renderer {
+    @discardableResult
+    func addMaterial(_ mat: PBRMaterial) -> Int {
+        let index = materialLibrary.add(mat)
+        // Re-upload materials buffer next frame; no need to rebuild AS
+        resetAccumulation()
+        return index
+    }
+
+    func setObjectMaterial(objectName: String, materialIndex: Int) async {
+        guard let object = await scene.getObject(id: objectName) else { return }
+        object.setMaterialIndex(materialIndex)
+        // Rebuild triangle->material mapping for AS
+        invalidateAccelerationStructure()
+        resetAccumulation()
     }
 }
 
@@ -380,6 +407,7 @@ extension Renderer {
         // Combine all vertices and indices into single buffers
         var allVertices: [Vertex] = []
         var allIndices: [UInt16] = []
+        var triMaterialIndices: [UInt32] = []
         
         for object in objects {
             let vertices = object.vertices()
@@ -390,6 +418,11 @@ extension Renderer {
             
             let offsetIndices = indices.map { $0 + vertexOffset }
             allIndices.append(contentsOf: offsetIndices)
+
+            // per-triangle material index duplicated for each triangle in this object
+            let triangleCount = indices.count / 3
+            let matIndex = UInt32(max(0, object.getMaterialIndex()))
+            triMaterialIndices.append(contentsOf: Array(repeating: matIndex, count: triangleCount))
         }
         
         // Create combined buffers
@@ -402,6 +435,13 @@ extension Renderer {
         combinedIndexBuffer = device.makeBuffer(
             bytes: allIndices,
             length: allIndices.count * MemoryLayout<UInt16>.stride,
+            options: []
+        )
+
+        // Build triangle->material index buffer
+        triangleMaterialIndexBuffer = device.makeBuffer(
+            bytes: triMaterialIndices,
+            length: triMaterialIndices.count * MemoryLayout<UInt32>.stride,
             options: []
         )
         
@@ -550,6 +590,10 @@ extension Renderer {
             print("No index buffer")
             return
         }
+        guard let triMatBuffer = triangleMaterialIndexBuffer else {
+            print("No triangle->material buffer")
+            return
+        }
 
         var samples = UInt32(samplesPerPixel)
         
@@ -557,6 +601,13 @@ extension Renderer {
         let lights = scene.getLightsForRendering()
         var lightDataArray = lights.map { $0.toLightData() }
         var lightCount = UInt32(lightDataArray.count)
+
+        // Setup materials
+        let mats = materialLibrary.getAll()
+        var materialCount = UInt32(mats.count)
+        if mats.count > 0 {
+            materialsBuffer = device.makeBuffer(bytes: mats, length: mats.count * MemoryLayout<PBRMaterial>.stride, options: [])
+        }
         
         // arguments for a compute shader
         computeEncoder.setComputePipelineState(computePipeline) // need to be first 
@@ -598,6 +649,13 @@ extension Renderer {
         computeEncoder.setBytes(&giMinDistanceVar, length: MemoryLayout<Float>.stride, index: 17)
         computeEncoder.setBytes(&giBiasVar, length: MemoryLayout<Float>.stride, index: 18)
         computeEncoder.setBytes(&giSampleDistributionVar, length: MemoryLayout<String>.stride, index: 19)
+
+        // Materials buffers (20+)
+        computeEncoder.setBytes(&materialCount, length: MemoryLayout<UInt32>.stride, index: 20)
+        if let materialsBuffer = materialsBuffer {
+            computeEncoder.setBuffer(materialsBuffer, offset: 0, index: 21)
+        }
+        computeEncoder.setBuffer(triMatBuffer, offset: 0, index: 22)
         
         let threadgroupSize = MTLSize(width: threadGroupSizeOneDimension, height: threadGroupSizeOneDimension, depth: 1) // TODO: make it configurable
         let threadgroups = MTLSize(

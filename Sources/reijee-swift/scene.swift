@@ -32,6 +32,7 @@ class SceneObject: @unchecked Sendable {
     fileprivate var geometry: RwLock<any Geometry & Transformable>
     fileprivate let pipelineName: String
     fileprivate var currentBufferIndex = RwLock<Int>(0)
+    fileprivate var materialIndex = RwLock<Int>(0)
 
     private let device: MTLDevice
     private var vertexBuffers: [MTLBuffer]
@@ -71,6 +72,14 @@ class SceneObject: @unchecked Sendable {
 
     func getIndexBuffer() -> MTLBuffer {
         return indexBuffers
+    }
+
+    func setMaterialIndex(_ index: Int) {
+        materialIndex.write { $0 = index }
+    }
+
+    func getMaterialIndex() -> Int {
+        return materialIndex.read { $0 }
     }
 }
 

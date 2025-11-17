@@ -33,6 +33,52 @@ struct LightData {
     float _padding;
 };
 
+struct PBRMaterial {
+    float3 baseColor;
+    float metallic;
+    float roughness;
+    float specular;
+    float ior;
+    float transmission;
+    float clearcoat;
+    float clearcoatRoughness;
+    float3 emissiveColor;
+    float emissiveIntensity;
+};
+
+// BRDF helpers (GGX + Schlick Fresnel + Disney Diffuse)
+float3 fresnelSchlick(float cosTheta, float3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+float distributionGGX(float3 N, float3 H, float alpha) {
+    float a2 = alpha * alpha;
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH * NdotH;
+    float denom = NdotH2 * (a2 - 1.0) + 1.0;
+    return a2 / max(3.14159265 * denom * denom, 1e-6);
+}
+
+float geometrySchlickGGX(float NdotV, float k) {
+    return NdotV / max(NdotV * (1.0 - k) + k, 1e-6);
+}
+
+float geometrySmith(float3 N, float3 V, float3 L, float k) {
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotL = max(dot(N, L), 0.0);
+    float ggx1 = geometrySchlickGGX(NdotV, k);
+    float ggx2 = geometrySchlickGGX(NdotL, k);
+    return ggx1 * ggx2;
+}
+
+float3 diffuseDisney(float3 baseColor, float roughness, float NdotL, float NdotV, float LdotH) {
+    float FL = pow(1.0 - NdotL, 5.0);
+    float FV = pow(1.0 - NdotV, 5.0);
+    float Fd90 = 0.5 + 2.0 * LdotH * LdotH * roughness;
+    float Fd = (1.0 + (Fd90 - 1.0) * FL) * (1.0 + (Fd90 - 1.0) * FV);
+    return baseColor * Fd * 0.31830988618; // 1/pi
+}
+
 float3 computeNormal(float3 v0, float3 v1, float3 v2) {
     float3 e1 = v1 - v0;
     float3 e2 = v2 - v0;
@@ -141,6 +187,9 @@ kernel void raytrace(
     constant float& giMinDistance [[buffer(17)]],
     constant float& giBias [[buffer(18)]],
     constant uint8_t* giSampleDistribution [[buffer(19)]],
+    constant uint& materialCount [[buffer(20)]],
+    const device PBRMaterial* materials [[buffer(21)]],
+    const device uint* triMaterialIndices [[buffer(22)]],
     uint2 tid [[thread_position_in_grid]]
 ) {
     if (tid.x >= output.get_width() || tid.y >= output.get_height()) {
@@ -200,6 +249,26 @@ kernel void raytrace(
         }
         
         float3 hitPos = r.origin + r.direction * intersection.distance;
+
+        // Fetch material for this triangle
+        uint triIndex = primitiveIndex; // 0-based triangle index
+        uint matIndex = triMaterialIndices[triIndex];
+        matIndex = matIndex < materialCount ? matIndex : 0u;
+        PBRMaterial mat = materials[matIndex];
+
+        float3 V = normalize(-r.direction);
+        float3 baseColor = clamp(mat.baseColor, 0.0, 10.0);
+        float metallic = clamp(mat.metallic, 0.0, 1.0);
+        float roughness = clamp(mat.roughness, 0.02, 1.0);
+        float specular = clamp(mat.specular, 0.0, 1.0);
+        float ior = max(mat.ior, 1.0);
+        float transmission = clamp(mat.transmission, 0.0, 1.0);
+        float clearcoat = clamp(mat.clearcoat, 0.0, 1.0);
+        float clearcoatRoughness = clamp(mat.clearcoatRoughness, 0.02, 1.0);
+        float3 emissive = mat.emissiveColor * mat.emissiveIntensity;
+        
+        float F0_diel = pow((ior - 1.0) / (ior + 1.0), 2.0);
+        float3 F0 = mix(float3(F0_diel * specular), baseColor, metallic);
         
         // Ambient Occlusion
         float ao = 1.0;
@@ -223,7 +292,7 @@ kernel void raytrace(
             ao /= float(aoSamples);
         }
         
-        float3 totalLight = float3(0.0);
+        float3 totalLight = emissive;
         
         for (uint lightIdx = 0; lightIdx < lightCount; lightIdx++) {
             LightData light = lights[lightIdx];
@@ -281,9 +350,21 @@ kernel void raytrace(
                     float visibility = traceShadow(shadowRay, accelStructure, shadowRay.max_distance) ? 0.0 : 1.0;
 
                     float attenuation = 1.0 / (distToSample * distToSample);
-                    // Uniform area sampling requires scaling by the light's area
-                    float area = max(1e-6, light.size.x * light.size.y);
-                    accum += nl * nl_light * visibility * lightColor * attenuation * area;
+                    float3 H = normalize(V + wi);
+                    float alpha = roughness * roughness;
+                    float D = distributionGGX(normal, H, alpha);
+                    float k = (roughness + 1.0);
+                    k = (k * k) / 8.0;
+                    float G = geometrySmith(normal, V, wi, k);
+                    float3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+                    float3 specBRDF = (D * G * F) / max(4.0 * max(dot(normal, V), 0.0) * nl, 1e-4);
+                    float3 kd = (1.0 - F) * (1.0 - metallic);
+                    float3 diffBRDF = diffuseDisney(baseColor, roughness, nl, max(dot(normal, V), 0.0), max(dot(wi, H), 0.0));
+                    float3 brdf = kd * diffBRDF + specBRDF;
+
+                    // Light's cosine is nl_light; surface cosine is nl
+                    float3 Li = lightColor * attenuation * nl_light * visibility;
+                    accum += brdf * Li * nl;
                 }
 
                 totalLight += accum / float(samples);
@@ -293,11 +374,11 @@ kernel void raytrace(
                 float distToLight = length(toLight);
                 float3 lightDir = toLight / max(distToLight, 1e-4);
 
-                float diffuse = max(0.0, dot(normal, lightDir));
+                float nl = max(0.0, dot(normal, lightDir));
                 float attenuation = 1.0 / max(distToLight * distToLight, 1e-4);
 
                 float shadow = 1.0;
-                if (diffuse > 0.0) {
+                if (nl > 0.0) {
                     float bias = max(0.001, 0.005 * (1.0 - abs(dot(normal, lightDir))));
 
                     if (light.softShadows == 1) {
@@ -346,11 +427,23 @@ kernel void raytrace(
                     }
                 }
 
-                totalLight += diffuse * shadow * baseLightColor * attenuation;
+                float3 H = normalize(V + lightDir);
+                float alpha = roughness * roughness;
+                float D = distributionGGX(normal, H, alpha);
+                float k = (roughness + 1.0); k = (k * k) / 8.0;
+                float G = geometrySmith(normal, V, lightDir, k);
+                float3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+                float3 specBRDF = (D * G * F) / max(4.0 * max(dot(normal, V), 0.0) * nl, 1e-4);
+                float3 kd = (1.0 - F) * (1.0 - metallic);
+                float3 diffBRDF = diffuseDisney(baseColor, roughness, nl, max(dot(normal, V), 0.0), max(dot(lightDir, H), 0.0));
+                float3 brdf = kd * diffBRDF + specBRDF;
+
+                totalLight += brdf * (baseLightColor * attenuation) * nl * shadow;
             }
         }
         
-        color = vertexColor * totalLight * ao;
+        // Base shading result from PBR (already includes emissive) with AO
+        color = totalLight * ao;
         
         // Global Illumination: path tracing style with throughput and direct lighting at bounces
         if (giEnabled == 1) {
@@ -390,11 +483,14 @@ kernel void raytrace(
                     uint giI1 = indices[giPrimitiveIndex * 3 + 1];
                     uint giI2 = indices[giPrimitiveIndex * 3 + 2];
 
+                    // Material-based diffuse albedo for GI
+                    uint giMatIndex = triMaterialIndices[giPrimitiveIndex];
+                    giMatIndex = giMatIndex < materialCount ? giMatIndex : 0u;
+                    PBRMaterial giMat = materials[giMatIndex];
+                    float3 giAlbedo = (1.0 - clamp(giMat.metallic, 0.0, 1.0)) * clamp(giMat.baseColor, 0.0, 1.0);
                     Vertex giV0 = vertices[giI0];
                     Vertex giV1 = vertices[giI1];
                     Vertex giV2 = vertices[giI2];
-
-                    float3 giAlbedo = (giV0.color.rgb * giW + giV1.color.rgb * giU + giV2.color.rgb * giV);
                     float3 giNormal = computeNormal(giV0.position, giV1.position, giV2.position);
                     if (dot(giNormal, -giRay.direction) < 0.0) {
                         giNormal = -giNormal;
