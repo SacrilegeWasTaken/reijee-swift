@@ -38,20 +38,21 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     private let maxAccumulatedSamples: UInt32 = 1024
     
     // AO settings
-    var aoEnabled: Bool = true
-    var aoSamples: UInt32 = 8
-    var aoRadius: Float = 1.0
-
+    private var aoEnabled: Bool = true
+    private var aoSamples: UInt32 = 8
+    private var aoRadius: Float = 1.0
+ 
     // Global Illumination settings
-    var giEnabled: Bool = false
-    var giSamples: UInt32 = 16
-    var giBounces: UInt32 = 2
-    var giIntensity: Float = 1.0
-    var giFalloff: Float = 2.0 // Added GI falloff parameter
-    var giMaxDistance: Float = 1000.0
-    var giMinDistance: Float = 0.001
-    var giBias: Float = 0.001
-    var giSampleDistribution: [UInt8] = Array("cosine".utf8) // Options: "uniform", "cosine"
+    private var giEnabled: Bool = false
+    private var giSamples: UInt32 = 16
+    private var giBounces: UInt32 = 5
+    private var giIntensity: Float = 1.0
+    private var giFalloff: Float = 2.0 // Added GI falloff parameter
+    private var giMaxDistance: Float = 1000.0
+    private var giMinDistance: Float = 0.001
+    private var giBias: Float = 0.001
+    private var giSampleDistribution: [UInt8] = Array("cosine".utf8) // Options: "uniform", "cosine"
+
 
     init(_ device: MTLDevice, pressedKeysProvider: @escaping () -> Set<UInt16>, shiftProvider: @escaping () -> Bool) {
         self.device = device
