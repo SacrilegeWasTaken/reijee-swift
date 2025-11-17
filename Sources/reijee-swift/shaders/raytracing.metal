@@ -581,8 +581,32 @@ kernel void raytrace(
                                     lightColor *= nl_light * area;
                                 }
 
+                                // Compute PDFs for MIS (power heuristic, beta=2)
+                                float pdf_light = 1e6; // default large for point lights
+                                if (light.type == 1) {
+                                    // sampling the area uniformly -> pdf_area = 1/area
+                                    float area = max(1e-6, light.size.x * light.size.y);
+                                    float nl_light = max(0.0, dot(-lightDirSample, normalize(light.direction)));
+                                    // convert area pdf to solid angle pdf
+                                    pdf_light = (distToSample * distToSample) / (area * max(nl_light, 1e-6));
+                                }
+
+                                // Approximate BRDF sampling pdf (mixture of diffuse and specular)
+                                float kd = 1.0 - max(clamp(mat.metallic, 0.0, 1.0), clamp(mat.specular, 0.0, 1.0));
+                                float pdf_brdf_diffuse = max(1e-6, nl * INV_PI);
+                                float pdf_brdf = kd * pdf_brdf_diffuse + 1e-6; // add tiny value for specular
+
+                                // Power heuristic
+                                float w_light = (pdf_light * pdf_light) / (pdf_light * pdf_light + pdf_brdf * pdf_brdf);
+
                                 float3 contrib = (currentAlbedo * INV_PI) * (nl * visibility) * lightColor * attenuation;
                                 contrib *= float(lightCount);
+                                contrib *= w_light;
+
+                                // Clamp per-sample contribution to avoid fireflies
+                                const float MAX_SAMPLE_RADIANCE = 100.0;
+                                contrib = clamp(contrib, float3(0.0), float3(MAX_SAMPLE_RADIANCE));
+
                                 giColor += throughput * contrib;
                             }
                         }
