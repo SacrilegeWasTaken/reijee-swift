@@ -154,21 +154,26 @@ struct DomeLight: Light {
     // Tint multiplies HDRI color; useful for subtle color shifts. Default is white (no tint).
     private var tint: SIMD3<Float>
     private var textureName: String
+    private var visible: Bool
 
-    init(textureName: String, intensity: Float = 1.0, rotation: SIMD3<Float> = SIMD3<Float>(0,0,0), tint: SIMD3<Float> = SIMD3<Float>(1,1,1)) {
+    init(textureName: String, intensity: Float = 1.0, rotation: SIMD3<Float> = SIMD3<Float>(0,0,0), tint: SIMD3<Float> = SIMD3<Float>(1,1,1), visible: Bool = true) {
         self.textureName = textureName
         self.intensity = intensity
         self.rotation = rotation
         self.tint = tint
+        self.visible = visible
     }
 
     // Preferred initializer (matches API used in app): rotation, intensity, tint, textureName
-    init(rotation: SIMD3<Float>, intensity: Float = 1.0, tint: SIMD3<Float> = SIMD3<Float>(1,1,1), textureName: String) {
+    init(rotation: SIMD3<Float>, intensity: Float = 1.0, tint: SIMD3<Float> = SIMD3<Float>(1,1,1), textureName: String, visible: Bool = true) {
         self.textureName = textureName
         self.intensity = intensity
         self.rotation = rotation
         self.tint = tint
+        self.visible = visible
     }
+
+    func getVisible() -> Bool { visible }
 
     func toLightData() -> LightData {
         // Environment lights are represented with type dome but don't provide positional lighting via LightData.

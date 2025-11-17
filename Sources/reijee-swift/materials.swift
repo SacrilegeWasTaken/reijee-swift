@@ -17,12 +17,12 @@ public struct PBRMaterial: Sendable {
 	public init(
 		baseColor: SIMD3<Float> = SIMD3<Float>(1, 1, 1),
 		metallic: Float = 0.0,
-		roughness: Float = 0.5,
-		specular: Float = 0.5,
+		roughness: Float = 1,
+		specular: Float = 0,
 		ior: Float = 1.5,
 		transmission: Float = 0.0,
 		clearcoat: Float = 0.0,
-		clearcoatRoughness: Float = 0.1,
+		clearcoatRoughness: Float = 0.0,
 		emissiveColor: SIMD3<Float> = SIMD3<Float>(0, 0, 0),
 		emissiveIntensity: Float = 0.0
 	) {

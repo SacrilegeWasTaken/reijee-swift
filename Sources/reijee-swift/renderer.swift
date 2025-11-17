@@ -719,12 +719,14 @@ extension Renderer {
         var envIntensityVar: Float = 1.0
         var envRotationVar = SIMD3<Float>(0,0,0)
         var envTintVar = SIMD3<Float>(1,1,1)
+        var envRenderVar: UInt32 = 1
         var envTexture: MTLTexture? = nil
         for light in lights {
             if let dome = light as? DomeLight {
                 envIntensityVar = dome.getIntensity()
                 envRotationVar = dome.getRotation()
                 envTintVar = dome.getTint()
+                envRenderVar = dome.getVisible() ? 1 : 0
                 envTexture = getEnvironmentTexture(dome.getTextureName())
                 if envTexture != nil {
                     envPresent = 1
@@ -739,6 +741,7 @@ extension Renderer {
         computeEncoder.setBytes(&envIntensityVar, length: MemoryLayout<Float>.stride, index: 24)
         computeEncoder.setBytes(&envRotationVar, length: MemoryLayout<SIMD3<Float>>.stride, index: 25)
         computeEncoder.setBytes(&envTintVar, length: MemoryLayout<SIMD3<Float>>.stride, index: 26)
+        computeEncoder.setBytes(&envRenderVar, length: MemoryLayout<UInt32>.stride, index: 27)
 
         // Materials buffers (20+)
         computeEncoder.setBytes(&materialCount, length: MemoryLayout<UInt32>.stride, index: 20)

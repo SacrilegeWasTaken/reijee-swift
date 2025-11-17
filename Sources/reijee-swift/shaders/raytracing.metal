@@ -230,6 +230,7 @@ kernel void raytrace(
     constant float& envIntensity [[buffer(24)]],
     constant float3& envRotation [[buffer(25)]],
     constant float3& envTint [[buffer(26)]],
+    constant uint& envRender [[buffer(27)]],
     uint2 tid [[thread_position_in_grid]]
 ) {
     if (tid.x >= output.get_width() || tid.y >= output.get_height()) {
@@ -483,7 +484,7 @@ kernel void raytrace(
             }
         }
         
-        // Add environment (approximate IBL): diffuse + specular contribution
+        // Add environment (approximate IBL): diffuse + specular contribution (lighting always allowed when present)
         if (envPresent == 1) {
             float3 envN = sampleEquirectangular(envTexture, normal, envRotation) * envIntensity * envTint;
             float3 envR = sampleEquirectangular(envTexture, reflect(-V, normal), envRotation) * envIntensity * envTint;
@@ -644,7 +645,8 @@ kernel void raytrace(
             color += giColor;
         }
         } else {
-            if (envPresent == 1) {
+            // Miss: render environment map only if present AND render flag is set
+            if (envPresent == 1 && envRender == 1) {
                 color = sampleEquirectangular(envTexture, r.direction, envRotation) * envIntensity * envTint;
             } else {
                 color = float3(0.0);

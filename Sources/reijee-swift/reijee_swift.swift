@@ -134,7 +134,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let pointLight = PointLight(
                 position: SIMD3<Float>(2, 5, 2),
                 color: SIMD3<Float>(0, 1, 0),
-                intensity: 3,
+                intensity: 5,
                 softShadows: true,
                 shadowConfig: ShadowConfig(samples: 8, radius: 0.2)
             )
@@ -143,7 +143,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let areaLight = AreaLight(
                 position: SIMD3<Float>(5, 1, 0), 
                 color: SIMD3<Float>(1, 0.0, 0.0), 
-                intensity: 15,
+                intensity: 30,
                 size: SIMD2<Float>(2, 2), 
                 direction: SIMD3<Float>(-1, 0, 0), 
                 focus: 2.0, 
@@ -153,9 +153,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             let domeLight = DomeLight(
                 rotation: SIMD3<Float>(0, 0, 0),
-                intensity: 1.0,
+                intensity: 0.5,
                 tint: SIMD3<Float>(1, 1, 1),
-                textureName: "modern_evening_street_4k.exr"
+                textureName: "modern_evening_street_4k.exr",
+                visible: true // use HDRI for lighting only, do not render the background
             )
             await renderer.addLight(name: "domeLight", light: domeLight)
             // Запускаем анимацию в главном потоке
