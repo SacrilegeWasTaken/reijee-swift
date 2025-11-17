@@ -164,6 +164,11 @@ inline float radicalInverse_VdC(uint bits) {
     return float(bits) * 2.3283064365386963e-10; // / 2^32
 }
 
+// Hammersley 2D (i/N, radicalInverse) with optional scramble
+inline float2 hammersley2D(uint i, uint N, uint scramble) {
+    return float2(float(i) / float(max(1u, N)), radicalInverse_VdC(i ^ scramble));
+}
+
 // Uniform sampling on unit sphere
 float3 randomSpherePoint(uint seed) {
     float2 u = random2(seed);
@@ -501,6 +506,7 @@ kernel void raytrace(
         // Global Illumination: path tracing style with throughput and direct lighting at bounces
         if (giEnabled == 1) {
             float3 giColor = float3(0.0);
+            const float MAX_SAMPLE_RADIANCE = 100.0;
             uint pathSamples = max(1u, giSamples);
             uint giBaseSeed = pcg_hash(tid.x + tid.y * output.get_width() + sample * 33331u ^ camera.frameIndex * 0x9E3779B9u);
 
@@ -591,10 +597,24 @@ kernel void raytrace(
                                     pdf_light = (distToSample * distToSample) / (area * max(nl_light, 1e-6));
                                 }
 
-                                // Approximate BRDF sampling pdf (mixture of diffuse and specular)
-                                float kd = 1.0 - max(clamp(mat.metallic, 0.0, 1.0), clamp(mat.specular, 0.0, 1.0));
+                                // Better BRDF sampling pdf: include a GGX specular pdf when material is glossy
+                                float specularParamLocal = clamp(mat.specular, 0.0, 1.0);
+                                float metallicLocal = clamp(mat.metallic, 0.0, 1.0);
+                                float specularWeight = max(metallicLocal, specularParamLocal);
+                                float diffuseWeight = 1.0 - specularWeight;
+
                                 float pdf_brdf_diffuse = max(1e-6, nl * INV_PI);
-                                float pdf_brdf = kd * pdf_brdf_diffuse + 1e-6; // add tiny value for specular
+                                // compute GGX specular PDF for sampling H -> L
+                                float rough = clamp(mat.roughness, 0.02, 1.0);
+                                float alphaSpec = rough * rough;
+                                float3 Vlocal = normalize(-bounceDir);
+                                float3 H_from_light = normalize(Vlocal + lightDirSample);
+                                float NdotH_spec = max(dot(bounceNormal, H_from_light), 1e-6);
+                                float VdotH_spec = max(dot(Vlocal, H_from_light), 1e-6);
+                                float D_spec = distributionGGX(bounceNormal, H_from_light, alphaSpec);
+                                float pdf_specular = (D_spec * NdotH_spec) / (4.0 * VdotH_spec + 1e-6);
+
+                                float pdf_brdf = diffuseWeight * pdf_brdf_diffuse + specularWeight * pdf_specular + 1e-8;
 
                                 // Power heuristic
                                 float w_light = (pdf_light * pdf_light) / (pdf_light * pdf_light + pdf_brdf * pdf_brdf);
@@ -603,9 +623,12 @@ kernel void raytrace(
                                 contrib *= float(lightCount);
                                 contrib *= w_light;
 
-                                // Clamp per-sample contribution to avoid fireflies
+                                // Clamp per-sample contribution to avoid fireflies (roughness-aware)
                                 const float MAX_SAMPLE_RADIANCE = 100.0;
-                                contrib = clamp(contrib, float3(0.0), float3(MAX_SAMPLE_RADIANCE));
+                                float curRough = clamp(mat.roughness, 0.02, 1.0);
+                                float clampScale = 0.2 + curRough * 0.8; // more aggressive clamp for low roughness
+                                float3 maxClamp = float3(MAX_SAMPLE_RADIANCE * clampScale);
+                                contrib = clamp(contrib, float3(0.0), maxClamp);
 
                                 giColor += throughput * contrib;
                             }
@@ -619,15 +642,20 @@ kernel void raytrace(
 
                     bool doSpecular = (specularEnabled == 1) && (specProb > 0.0);
                     float rrand = rand01(giSeed);
+
+                    // Low-discrepancy Hammersley sample for this bounce/sample pair
+                    uint hN = max(1u, giBounces * pathSamples);
+                    uint hIndex = (s * giBounces + bounce) % hN;
+                    uint scramble = pcg_hash(giSeed ^ 0x9E3779B9u);
+                    float2 Xi = hammersley2D(hIndex, hN, scramble);
                     giSeed = pcg_hash(giSeed + 0x7ED55D16u);
 
                     float3 sampledDir;
                     if (doSpecular && rrand < specProb && specularCount < specularBounces) {
                         float roughness = clamp(mat.roughness, 0.02, 1.0);
                         float alpha = roughness * roughness;
-                        float2 Xi = rand2(giSeed);
-                        giSeed = pcg_hash(giSeed + 0x9E3779B9u);
 
+                        // Importance sample GGX normal distribution using Xi (H sample)
                         float phi = 2.0 * 3.14159265 * Xi.x;
                         float cosTheta = sqrt((1.0 - Xi.y) / (1.0 + (alpha*alpha - 1.0) * Xi.y));
                         float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
@@ -645,16 +673,31 @@ kernel void raytrace(
                         float NdotH = max(dot(bounceNormal, H), 1e-6);
                         float VdotH = max(dot(Vlocal, H), 1e-6);
                         float NdotV = max(dot(bounceNormal, Vlocal), 1e-6);
-                        float3 F0 = mix(float3(pow((mat.ior - 1.0)/(mat.ior + 1.0), 2.0) * mat.specular), mat.baseColor, mat.metallic);
-                        float3 F = fresnelSchlick(max(dot(H, Vlocal), 0.0), F0);
+                        float3 F0_local = mix(float3(pow((mat.ior - 1.0)/(mat.ior + 1.0), 2.0) * mat.specular), mat.baseColor, mat.metallic);
+                        float3 F = fresnelSchlick(max(dot(H, Vlocal), 0.0), F0_local);
                         float G = geometrySmith(bounceNormal, Vlocal, sampledDir, (mat.roughness + 1.0));
                         float3 specContrib = F * G * VdotH / (NdotV * NdotH);
-                        throughput *= specContrib;
+
+                        // account for discrete branch probability (we chose specular with probability specProb)
+                        float invSpecProb = 1.0 / max(specProb, 1e-6);
+                        throughput *= specContrib * invSpecProb;
                         specularCount += 1u;
                     } else {
-                        sampledDir = randomCosineHemisphere(giSeed, bounceNormal);
-                        giSeed = pcg_hash(giSeed + 0x13579BDFu);
-                        throughput *= currentAlbedo;
+                        // cosine-weighted hemisphere sampling using Hammersley Xi
+                        float r = sqrt(Xi.x);
+                        float theta = 2.0 * 3.14159265 * Xi.y;
+                        float x = r * cos(theta);
+                        float y = r * sin(theta);
+                        float z = sqrt(max(0.0, 1.0 - Xi.x));
+
+                        float3 up = fabs(bounceNormal.z) < 0.999 ? float3(0,0,1) : float3(1,0,0);
+                        float3 tangent = normalize(cross(up, bounceNormal));
+                        float3 bitangent = cross(bounceNormal, tangent);
+                        sampledDir = normalize(tangent * x + bitangent * y + bounceNormal * z);
+
+                        // account for discrete branch probability (we chose diffuse with 1-specProb)
+                        float invDiffProb = 1.0 / max(1.0 - specProb, 1e-6);
+                        throughput *= currentAlbedo * invDiffProb;
                     }
 
                     // Trace the sampled direction
@@ -669,7 +712,12 @@ kernel void raytrace(
                         // Miss: add environment contribution scaled by throughput
                         if (envPresent == 1) {
                             float3 envSample = sampleEquirectangular(envTexture, giRay.direction, envRotation) * envIntensity * envTint;
-                            giColor += throughput * envSample;
+                            // Roughness-aware clamping for env contribution
+                            float curRoughEnv = clamp(mat.roughness, 0.02, 1.0);
+                            float envClampScale = 0.2 + curRoughEnv * 0.8;
+                            float3 envMaxClamp = float3(MAX_SAMPLE_RADIANCE * envClampScale);
+                            float3 envContrib = clamp(throughput * envSample, float3(0.0), envMaxClamp);
+                            giColor += envContrib;
                         }
                         break;
                     }
