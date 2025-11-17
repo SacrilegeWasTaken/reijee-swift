@@ -93,53 +93,6 @@ bool traceShadow(ray r, primitive_acceleration_structure accelStructure, float m
     return shadowHit.type != intersection_type::none;
 }
 
-// Simple direct lighting with hard shadows for GI hits
-float3 computeDirectLightingGI(
-    float3 hitPos,
-    float3 normal,
-    constant LightData* lights,
-    uint lightCount,
-    primitive_acceleration_structure accelStructure
-) {
-    float3 totalLight = float3(0.0);
-    for (uint lightIdx = 0; lightIdx < lightCount; lightIdx++) {
-        LightData light = lights[lightIdx];
-        float3 lightPos = light.position;
-        float3 lightColor = light.color * light.intensity;
-        float3 toLight = lightPos - hitPos;
-        float distToLight = length(toLight);
-        float3 lightDir = toLight / max(distToLight, 1e-4);
-
-        if (light.type == 1) {
-            float3 areaLightDir = normalize(light.direction);
-            float directionDot = dot(-lightDir, areaLightDir);
-            if (directionDot <= 0.0) {
-                continue;
-            }
-            if (light.focus > 0.0) {
-                float focusFalloff = pow(max(0.0, directionDot), light.focus);
-                lightColor *= focusFalloff;
-            }
-        }
-
-        float diffuse = max(0.0, dot(normal, lightDir));
-        if (diffuse <= 0.0) continue;
-
-        float attenuation = 1.0 / max(distToLight * distToLight, 1e-4);
-
-        float bias = max(0.001, 0.005 * (1.0 - abs(dot(normal, lightDir))));
-        ray shadowRay;
-        shadowRay.origin = hitPos + normal * bias;
-        shadowRay.direction = lightDir;
-        shadowRay.min_distance = bias;
-        shadowRay.max_distance = max(distToLight - bias, 0.0);
-        float visibility = traceShadow(shadowRay, accelStructure, shadowRay.max_distance) ? 0.0 : 1.0;
-
-        totalLight += diffuse * visibility * lightColor * attenuation;
-    }
-    return totalLight;
-}
-
 kernel void raytrace(
     texture2d<float, access::write> output [[texture(0)]],
     texture2d<float, access::read_write> accumulation [[texture(1)]],
@@ -390,11 +343,69 @@ kernel void raytrace(
 
                     float3 giHitPos = giRay.origin + giRay.direction * giIntersection.distance;
 
-                    // Accumulate direct lighting at this bounce using BRDF (Lambert: albedo/pi)
+                    // Next-Event Estimation: sample a single light and cast one shadow ray
                     const float INV_PI = 0.31830988618; // 1/pi
                     float3 albedoClamped = clamp(giAlbedo, 0.0, 1.0);
-                    float3 directLight = computeDirectLightingGI(giHitPos, giNormal, lights, lightCount, accelStructure);
-                    giColor += throughput * (albedoClamped * INV_PI) * directLight;
+                    if (lightCount > 0u) {
+                        uint lightIdx = pcg_hash(giSeed) % lightCount;
+                        giSeed = pcg_hash(giSeed + 0xA24BAEDCu);
+                        LightData light = lights[lightIdx];
+
+                        float3 samplePos = light.position;
+                        float3 lightDirSample;
+                        float distToSample;
+                        float3 lightColor = light.color * light.intensity;
+
+                        bool validLightSample = true;
+                        if (light.type == 1) {
+                            // Sample a point on the area light rectangle
+                            float2 u = random2(giSeed) - 0.5;
+                            giSeed = pcg_hash(giSeed + 0x9E3779B9u);
+                            float3 areaDir = normalize(light.direction);
+                            float3 lightRight = normalize(cross(areaDir, float3(0, 1, 0)));
+                            if (length(lightRight) < 0.1) {
+                                lightRight = normalize(cross(areaDir, float3(1, 0, 0)));
+                            }
+                            float3 lightUp = cross(lightRight, areaDir);
+                            samplePos = light.position + lightRight * (u.x * light.size.x) + lightUp * (u.y * light.size.y);
+
+                            float3 toLightSample = samplePos - giHitPos;
+                            distToSample = length(toLightSample);
+                            lightDirSample = toLightSample / max(distToSample, 1e-4);
+
+                            float dirDot = dot(-lightDirSample, areaDir);
+                            if (dirDot <= 0.0) {
+                                // Light faces away, skip this sample
+                                validLightSample = false;
+                            }
+                            if (light.focus > 0.0) {
+                                float focusFalloff = pow(max(0.0, dirDot), light.focus);
+                                lightColor *= focusFalloff;
+                            }
+                        } else { // point light
+                            float3 toLightSample = light.position - giHitPos;
+                            distToSample = length(toLightSample);
+                            lightDirSample = toLightSample / max(distToSample, 1e-4);
+                        }
+                        if (validLightSample) {
+                            float nl = max(0.0, dot(giNormal, lightDirSample));
+                            if (nl > 0.0) {
+                                float attenuation = 1.0 / max(distToSample * distToSample, 1e-4);
+                                float bias = max(0.001, 0.005 * (1.0 - abs(dot(giNormal, lightDirSample))));
+                                ray shadowRay;
+                                shadowRay.origin = giHitPos + giNormal * bias;
+                                shadowRay.direction = lightDirSample;
+                                shadowRay.min_distance = bias;
+                                shadowRay.max_distance = max(distToSample - bias, 0.0);
+                                float visibility = traceShadow(shadowRay, accelStructure, shadowRay.max_distance) ? 0.0 : 1.0;
+
+                                float3 contrib = (albedoClamped * INV_PI) * (nl * visibility) * lightColor * attenuation;
+                                // Scale for uniform light selection
+                                contrib *= float(lightCount);
+                                giColor += throughput * contrib;
+                            }
+                        }
+                    }
 
                     // Update throughput for next bounce (Lambertian BRDF expectation under cosine sampling)
                     throughput *= (albedoClamped * INV_PI);
