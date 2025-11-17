@@ -202,93 +202,119 @@ kernel void raytrace(
         for (uint lightIdx = 0; lightIdx < lightCount; lightIdx++) {
             LightData light = lights[lightIdx];
             float3 lightPos = light.position;
-            float3 lightColor = light.color * light.intensity;
-            float3 toLight = lightPos - hitPos;
-            float distToLight = length(toLight);
-            float3 lightDir = toLight / distToLight;
-            
-            // Area light directional check
+            float3 baseLightColor = light.color * light.intensity;
+
             if (light.type == 1) {
-                float3 areaLightDir = normalize(light.direction);
-                float directionDot = dot(-lightDir, areaLightDir);
-                if (directionDot <= 0.0) {
-                    continue;
+                // Rectangular area light: sample the emitting rectangle instead of treating like a point
+                float3 areaDir = normalize(light.direction);
+                float3 lightRight = normalize(cross(areaDir, float3(0, 1, 0)));
+                if (length(lightRight) < 0.1) {
+                    lightRight = normalize(cross(areaDir, float3(1, 0, 0)));
                 }
-                // Focus falloff
-                if (light.focus > 0.0) {
-                    float focusFalloff = pow(max(0.0, directionDot), light.focus);
-                    lightColor *= focusFalloff;
+                float3 lightUp = cross(lightRight, areaDir);
+
+                uint samples = max(1u, light.shadowSamples);
+                float3 accum = float3(0.0);
+
+                for (uint s = 0; s < samples; s++) {
+                    uint lseed = tid.x + tid.y * output.get_width() + s * 9876u + lightIdx * 5432u + camera.frameIndex * 11111u + sample * 22222u;
+                    float2 u = random2(pcg_hash(lseed)) - 0.5;
+
+                    float3 samplePos = lightPos + lightRight * (u.x * light.size.x) + lightUp * (u.y * light.size.y);
+
+                    float3 toLightSample = samplePos - hitPos;
+                    float distToSample = length(toLightSample);
+                    if (distToSample <= 1e-4) {
+                        continue;
+                    }
+                    float3 wi = toLightSample / distToSample;
+
+                    float nl = max(0.0, dot(normal, wi));
+                    float nl_light = max(0.0, dot(-wi, areaDir));
+                    if (nl <= 0.0 || nl_light <= 0.0) {
+                        continue;
+                    }
+
+                    float3 lightColor = baseLightColor;
+                    if (light.focus > 0.0) {
+                        float focusFalloff = pow(nl_light, light.focus);
+                        lightColor *= focusFalloff;
+                    }
+
+                    float bias = max(0.001, 0.005 * (1.0 - abs(dot(normal, wi))));
+                    ray shadowRay;
+                    shadowRay.origin = hitPos + normal * bias;
+                    shadowRay.direction = wi;
+                    shadowRay.min_distance = bias;
+                    shadowRay.max_distance = distToSample - bias;
+                    float visibility = traceShadow(shadowRay, accelStructure, shadowRay.max_distance) ? 0.0 : 1.0;
+
+                    float attenuation = 1.0 / (distToSample * distToSample);
+                    accum += nl * nl_light * visibility * lightColor * attenuation;
                 }
-            }
-            
-            float diffuse = max(0.0, dot(normal, lightDir));
-            float attenuation = 1.0 / (distToLight * distToLight);
-            
-            float shadow = 1.0;
-            if (diffuse > 0.0) {
-                // Adaptive bias based on angle and distance
-                float bias = max(0.001, 0.005 * (1.0 - abs(dot(normal, lightDir))));
-                
-                if (light.softShadows == 1) {
-                    float shadowSum = 0.0;
-                    uint samples = light.shadowSamples;
-                    float totalWeight = 0.0;
-                    
-                    for (uint s = 0; s < samples; s++) {
-                        uint shadowSeed = tid.x + tid.y * output.get_width() + s * 9876u + lightIdx * 5432u + camera.frameIndex * 11111u + sample * 22222u;
-                        float3 samplePos = lightPos;
-                        float weight = 1.0;
-                        
-                        if (light.type == 1) {
-                            // Stratified sampling for area lights
-                            float2 offset = random2(shadowSeed) - 0.5;
-                            
-                            float3 lightRight = normalize(cross(light.direction, float3(0, 1, 0)));
-                            if (length(lightRight) < 0.1) {
-                                lightRight = normalize(cross(light.direction, float3(1, 0, 0)));
-                            }
-                            float3 lightUp = cross(lightRight, light.direction);
-                            samplePos += lightRight * offset.x * light.size.x * light.shadowRadius + lightUp * offset.y * light.size.y * light.shadowRadius;
-                        } else if (light.type == 0) {
+
+                totalLight += accum / float(samples);
+            } else {
+                // Point light fallback (existing behavior)
+                float3 toLight = lightPos - hitPos;
+                float distToLight = length(toLight);
+                float3 lightDir = toLight / max(distToLight, 1e-4);
+
+                float diffuse = max(0.0, dot(normal, lightDir));
+                float attenuation = 1.0 / max(distToLight * distToLight, 1e-4);
+
+                float shadow = 1.0;
+                if (diffuse > 0.0) {
+                    float bias = max(0.001, 0.005 * (1.0 - abs(dot(normal, lightDir))));
+
+                    if (light.softShadows == 1) {
+                        float shadowSum = 0.0;
+                        uint samples = max(1u, light.shadowSamples);
+                        float totalWeight = 0.0;
+
+                        for (uint s = 0; s < samples; s++) {
+                            uint shadowSeed = tid.x + tid.y * output.get_width() + s * 9876u + lightIdx * 5432u + camera.frameIndex * 11111u + sample * 22222u;
+                            float3 samplePos = lightPos;
+                            float weight = 1.0;
+
                             // Importance sampling for point lights - sample towards surface
                             float3 toSurface = normalize(hitPos - lightPos);
                             float3 randomDir = randomCosineHemisphere(shadowSeed, toSurface);
                             samplePos += randomDir * light.shadowRadius;
-                            
+
                             // Weight by cosine for importance sampling
                             weight = max(0.1, dot(randomDir, toSurface));
+
+                            float3 toLightSample = samplePos - hitPos;
+                            float distToSample = length(toLightSample);
+                            float3 lightDirSample = normalize(toLightSample);
+
+                            float sampleDot = dot(normal, lightDirSample);
+                            if (sampleDot > 0.0) {
+                                ray shadowRay;
+                                shadowRay.origin = hitPos + normal * bias;
+                                shadowRay.direction = lightDirSample;
+                                shadowRay.min_distance = bias;
+                                shadowRay.max_distance = distToSample - bias;
+
+                                float visibility = traceShadow(shadowRay, accelStructure, distToSample - bias) ? 0.0 : 1.0;
+                                shadowSum += visibility * weight;
+                                totalWeight += weight;
+                            }
                         }
-                        
-                        float3 toLightSample = samplePos - hitPos;
-                        float distToSample = length(toLightSample);
-                        float3 lightDirSample = normalize(toLightSample);
-                        
-                        // Check if sample is above surface
-                        float sampleDot = dot(normal, lightDirSample);
-                        if (sampleDot > 0.0) {
-                            ray shadowRay;
-                            shadowRay.origin = hitPos + normal * bias;
-                            shadowRay.direction = lightDirSample;
-                            shadowRay.min_distance = bias;
-                            shadowRay.max_distance = distToSample - bias;
-                            
-                            float visibility = traceShadow(shadowRay, accelStructure, distToSample - bias) ? 0.0 : 1.0;
-                            shadowSum += visibility * weight;
-                            totalWeight += weight;
-                        }
+                        shadow = totalWeight > 0.0 ? shadowSum / totalWeight : 0.0;
+                    } else {
+                        ray shadowRay;
+                        shadowRay.origin = hitPos + normal * bias;
+                        shadowRay.direction = lightDir;
+                        shadowRay.min_distance = bias;
+                        shadowRay.max_distance = max(distToLight - bias, 0.0);
+                        shadow = traceShadow(shadowRay, accelStructure, shadowRay.max_distance) ? 0.0 : 1.0;
                     }
-                    shadow = totalWeight > 0.0 ? shadowSum / totalWeight : 0.0;
-                } else {
-                    ray shadowRay;
-                    shadowRay.origin = hitPos + normal * bias;
-                    shadowRay.direction = lightDir;
-                    shadowRay.min_distance = bias;
-                    shadowRay.max_distance = distToLight - bias;
-                    shadow = traceShadow(shadowRay, accelStructure, distToLight - bias) ? 0.0 : 1.0;
                 }
+
+                totalLight += diffuse * shadow * baseLightColor * attenuation;
             }
-            
-            totalLight += diffuse * shadow * lightColor * attenuation;
         }
         
         color = vertexColor * totalLight * ao;
@@ -398,6 +424,13 @@ kernel void raytrace(
                                 shadowRay.min_distance = bias;
                                 shadowRay.max_distance = max(distToSample - bias, 0.0);
                                 float visibility = traceShadow(shadowRay, accelStructure, shadowRay.max_distance) ? 0.0 : 1.0;
+
+                                // Include light's cosine foreshortening for area lights to better match rectangular emission
+                                if (light.type == 1) {
+                                    float3 areaDirLocal = normalize(light.direction);
+                                    float nl_light = max(0.0, dot(-lightDirSample, areaDirLocal));
+                                    lightColor *= nl_light;
+                                }
 
                                 float3 contrib = (albedoClamped * INV_PI) * (nl * visibility) * lightColor * attenuation;
                                 // Scale for uniform light selection
