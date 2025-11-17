@@ -231,6 +231,8 @@ kernel void raytrace(
     constant float3& envRotation [[buffer(25)]],
     constant float3& envTint [[buffer(26)]],
     constant uint& envRender [[buffer(27)]],
+    constant uint& specularEnabled [[buffer(28)]],
+    constant uint& specularBounces [[buffer(29)]],
     uint2 tid [[thread_position_in_grid]]
 ) {
     if (tid.x >= output.get_width() || tid.y >= output.get_height()) {
@@ -484,11 +486,13 @@ kernel void raytrace(
             }
         }
         
-        // Add environment (approximate IBL): diffuse + specular contribution (lighting always allowed when present)
-        if (envPresent == 1) {
-            float3 envN = sampleEquirectangular(envTexture, normal, envRotation) * envIntensity * envTint;
+        // Add environment lighting: when GI is disabled, approximate specular IBL from the HDRI.
+        // When GI is enabled we rely on the path tracer to account for specular inter-reflections
+        if (envPresent == 1 && giEnabled == 0) {
             float3 envR = sampleEquirectangular(envTexture, reflect(-V, normal), envRotation) * envIntensity * envTint;
-            totalLight += envN * (1.0 - metallic) * 0.5 + envR * F0 * 0.5;
+            // For rough surfaces the env reflection should be blurred/prefiltered; approximate by scaling by (1 - roughness)
+            float specularLodFactor = 1.0 - roughness;
+            totalLight += envR * F0 * specularLodFactor;
         }
 
         // Base shading result from PBR (already includes emissive) with AO
@@ -504,35 +508,155 @@ kernel void raytrace(
                 uint giSeed = pcg_hash(giBaseSeed + s * 0x85EBCA6Bu);
                 float3 throughput = float3(1.0);
                 float3 bounceOrigin = hitPos;
+                float3 bounceDir = V; // view direction from hit: V = -r.direction
                 float3 bounceNormal = normal;
+                uint specularCount = 0u;
 
                 for (uint bounce = 0; bounce < giBounces; bounce++) {
-                    // Sample next direction (cosine-weighted). For Lambertian, BRDF/pdf cancels out.
-                    float3 bounceDirection = randomCosineHemisphere(giSeed, bounceNormal);
-                    giSeed = pcg_hash(giSeed + 0x27D4EB2Du + bounce);
+                    // At the start of each bounce we have a current surface: bounceOrigin, bounceNormal
+                    // Perform Next-Event Estimation (one light sample) using current surface
+                    const float INV_PI = 0.31830988618; // 1/pi
+                    // current material info for this surface
+                    uint currentTriIndex = 0u; // not used for NEE here
+                    float3 currentAlbedo = clamp((1.0 - clamp(mat.metallic, 0.0, 1.0)) * clamp(mat.baseColor, 0.0, 1.0), 0.0, 1.0);
 
+                    if (lightCount > 0u) {
+                        uint lightIdx = pcg_hash(giSeed) % lightCount;
+                        giSeed = pcg_hash(giSeed + 0xA24BAEDCu);
+                        LightData light = lights[lightIdx];
+
+                        float3 samplePos = light.position;
+                        float3 lightDirSample;
+                        float distToSample;
+                        float3 lightColor = light.color * light.intensity;
+
+                        bool validLightSample = true;
+                        if (light.type == 1) {
+                            uint scramble = pcg_hash(giSeed ^ lightIdx * 0x9E3779B9u ^ camera.frameIndex * 0x85EBCA6Bu);
+                            float u0 = fract((float(s) + random(giSeed)) / max(1.0, float(pathSamples)) + random(giSeed + 17u));
+                            float u1 = radicalInverse_VdC((s % max(1u, pathSamples)) ^ scramble);
+                            float2 u = float2(u0, u1) - 0.5;
+                            giSeed = pcg_hash(giSeed + 0x9E3779B9u);
+                            float3 areaDir = normalize(light.direction);
+                            float3 lightRight = normalize(cross(areaDir, float3(0, 1, 0)));
+                            if (length(lightRight) < 0.1) {
+                                lightRight = normalize(cross(areaDir, float3(1, 0, 0)));
+                            }
+                            float3 lightUp = cross(lightRight, areaDir);
+                            samplePos = light.position + lightRight * (u.x * light.size.x) + lightUp * (u.y * light.size.y);
+
+                            float3 toLightSample = samplePos - bounceOrigin;
+                            distToSample = length(toLightSample);
+                            lightDirSample = toLightSample / max(distToSample, 1e-4);
+
+                            float dirDot = dot(-lightDirSample, areaDir);
+                            if (dirDot <= 0.0) {
+                                validLightSample = false;
+                            }
+                            if (light.focus > 0.0) {
+                                float focusFalloff = pow(max(0.0, dirDot), light.focus);
+                                lightColor *= focusFalloff;
+                            }
+                        } else {
+                            float3 toLightSample = light.position - bounceOrigin;
+                            distToSample = length(toLightSample);
+                            lightDirSample = toLightSample / max(distToSample, 1e-4);
+                        }
+                        if (validLightSample) {
+                            float nl = max(0.0, dot(bounceNormal, lightDirSample));
+                            if (nl > 0.0) {
+                                float attenuation = 1.0 / max(distToSample * distToSample, 1e-4);
+                                float bias = max(0.001, 0.005 * (1.0 - abs(dot(bounceNormal, lightDirSample))));
+                                ray shadowRay;
+                                shadowRay.origin = bounceOrigin + bounceNormal * bias;
+                                shadowRay.direction = lightDirSample;
+                                shadowRay.min_distance = bias;
+                                shadowRay.max_distance = max(distToSample - bias, 0.0);
+                                float visibility = traceShadow(shadowRay, accelStructure, shadowRay.max_distance) ? 0.0 : 1.0;
+
+                                if (light.type == 1) {
+                                    float3 areaDirLocal = normalize(light.direction);
+                                    float nl_light = max(0.0, dot(-lightDirSample, areaDirLocal));
+                                    float area = max(1e-6, light.size.x * light.size.y);
+                                    lightColor *= nl_light * area;
+                                }
+
+                                float3 contrib = (currentAlbedo * INV_PI) * (nl * visibility) * lightColor * attenuation;
+                                contrib *= float(lightCount);
+                                giColor += throughput * contrib;
+                            }
+                        }
+                    }
+
+                    // Sample next direction according to BRDF at current surface
+                    float metallic = clamp(mat.metallic, 0.0, 1.0);
+                    float specularParam = clamp(mat.specular, 0.0, 1.0);
+                    float specProb = max(metallic, specularParam);
+
+                    bool doSpecular = (specularEnabled == 1) && (specProb > 0.0);
+                    float rrand = rand01(giSeed);
+                    giSeed = pcg_hash(giSeed + 0x7ED55D16u);
+
+                    float3 sampledDir;
+                    if (doSpecular && rrand < specProb && specularCount < specularBounces) {
+                        float roughness = clamp(mat.roughness, 0.02, 1.0);
+                        float alpha = roughness * roughness;
+                        float2 Xi = rand2(giSeed);
+                        giSeed = pcg_hash(giSeed + 0x9E3779B9u);
+
+                        float phi = 2.0 * 3.14159265 * Xi.x;
+                        float cosTheta = sqrt((1.0 - Xi.y) / (1.0 + (alpha*alpha - 1.0) * Xi.y));
+                        float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+                        float3 Ht = float3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
+
+                        float3 up = fabs(bounceNormal.z) < 0.999 ? float3(0,0,1) : float3(1,0,0);
+                        float3 tangent = normalize(cross(up, bounceNormal));
+                        float3 bitangent = cross(bounceNormal, tangent);
+                        float3 H = normalize(tangent * Ht.x + bitangent * Ht.y + bounceNormal * Ht.z);
+
+                        float3 Vlocal = normalize(bounceDir);
+                        sampledDir = normalize(reflect(-Vlocal, H));
+
+                        // update throughput using importance-sampled microfacet formula (BRDF * cos / pdf)
+                        float NdotH = max(dot(bounceNormal, H), 1e-6);
+                        float VdotH = max(dot(Vlocal, H), 1e-6);
+                        float NdotV = max(dot(bounceNormal, Vlocal), 1e-6);
+                        float3 F0 = mix(float3(pow((mat.ior - 1.0)/(mat.ior + 1.0), 2.0) * mat.specular), mat.baseColor, mat.metallic);
+                        float3 F = fresnelSchlick(max(dot(H, Vlocal), 0.0), F0);
+                        float G = geometrySmith(bounceNormal, Vlocal, sampledDir, (mat.roughness + 1.0));
+                        float3 specContrib = F * G * VdotH / (NdotV * NdotH);
+                        throughput *= specContrib;
+                        specularCount += 1u;
+                    } else {
+                        sampledDir = randomCosineHemisphere(giSeed, bounceNormal);
+                        giSeed = pcg_hash(giSeed + 0x13579BDFu);
+                        throughput *= currentAlbedo;
+                    }
+
+                    // Trace the sampled direction
                     ray giRay;
                     giRay.origin = bounceOrigin + bounceNormal * giBias;
-                    giRay.direction = bounceDirection;
+                    giRay.direction = sampledDir;
                     giRay.min_distance = giMinDistance;
                     giRay.max_distance = giMaxDistance;
 
                     intersection_result<triangle_data> giIntersection = i.intersect(giRay, accelStructure);
                     if (giIntersection.type != intersection_type::triangle) {
+                        // Miss: add environment contribution scaled by throughput
+                        if (envPresent == 1) {
+                            float3 envSample = sampleEquirectangular(envTexture, giRay.direction, envRotation) * envIntensity * envTint;
+                            giColor += throughput * envSample;
+                        }
                         break;
                     }
 
+                    // Update hit info for next bounce
                     float2 giBary = giIntersection.triangle_barycentric_coord;
-                    float giU = giBary.x;
-                    float giV = giBary.y;
-                    float giW = 1.0 - giU - giV;
-
                     uint giPrimitiveIndex = giIntersection.primitive_id;
                     uint giI0 = indices[giPrimitiveIndex * 3 + 0];
                     uint giI1 = indices[giPrimitiveIndex * 3 + 1];
                     uint giI2 = indices[giPrimitiveIndex * 3 + 2];
 
-                    // Material-based diffuse albedo for GI
                     uint giMatIndex = triMaterialIndices[giPrimitiveIndex];
                     giMatIndex = giMatIndex < materialCount ? giMatIndex : 0u;
                     PBRMaterial giMat = materials[giMatIndex];
@@ -547,97 +671,19 @@ kernel void raytrace(
 
                     float3 giHitPos = giRay.origin + giRay.direction * giIntersection.distance;
 
-                    // Next-Event Estimation: sample a single light and cast one shadow ray
-                    const float INV_PI = 0.31830988618; // 1/pi
-                    float3 albedoClamped = clamp(giAlbedo, 0.0, 1.0);
-                    if (lightCount > 0u) {
-                        uint lightIdx = pcg_hash(giSeed) % lightCount;
-                        giSeed = pcg_hash(giSeed + 0xA24BAEDCu);
-                        LightData light = lights[lightIdx];
+                    // Prepare for next bounce
+                    bounceOrigin = giHitPos;
+                    bounceNormal = giNormal;
+                    // Update the material used for next NEE and sampling
+                    mat = giMat;
 
-                        float3 samplePos = light.position;
-                        float3 lightDirSample;
-                        float distToSample;
-                        float3 lightColor = light.color * light.intensity;
-
-                        bool validLightSample = true;
-                        if (light.type == 1) {
-                            // Sample a point on the area light rectangle using scrambled Hammersley + CP rotation
-                            uint scramble = pcg_hash(giSeed ^ lightIdx * 0x9E3779B9u ^ camera.frameIndex * 0x85EBCA6Bu);
-                            float u0 = fract((float(s) + random(giSeed)) / max(1.0, float(pathSamples)) + random(giSeed + 17u));
-                            float u1 = radicalInverse_VdC((s % max(1u, pathSamples)) ^ scramble);
-                            float2 u = float2(u0, u1) - 0.5;
-                            giSeed = pcg_hash(giSeed + 0x9E3779B9u);
-                            float3 areaDir = normalize(light.direction);
-                            float3 lightRight = normalize(cross(areaDir, float3(0, 1, 0)));
-                            if (length(lightRight) < 0.1) {
-                                lightRight = normalize(cross(areaDir, float3(1, 0, 0)));
-                            }
-                            float3 lightUp = cross(lightRight, areaDir);
-                            samplePos = light.position + lightRight * (u.x * light.size.x) + lightUp * (u.y * light.size.y);
-
-                            float3 toLightSample = samplePos - giHitPos;
-                            distToSample = length(toLightSample);
-                            lightDirSample = toLightSample / max(distToSample, 1e-4);
-
-                            float dirDot = dot(-lightDirSample, areaDir);
-                            if (dirDot <= 0.0) {
-                                // Light faces away, skip this sample
-                                validLightSample = false;
-                            }
-                            if (light.focus > 0.0) {
-                                float focusFalloff = pow(max(0.0, dirDot), light.focus);
-                                lightColor *= focusFalloff;
-                            }
-                        } else { // point light
-                            float3 toLightSample = light.position - giHitPos;
-                            distToSample = length(toLightSample);
-                            lightDirSample = toLightSample / max(distToSample, 1e-4);
-                        }
-                        if (validLightSample) {
-                            float nl = max(0.0, dot(giNormal, lightDirSample));
-                            if (nl > 0.0) {
-                                float attenuation = 1.0 / max(distToSample * distToSample, 1e-4);
-                                float bias = max(0.001, 0.005 * (1.0 - abs(dot(giNormal, lightDirSample))));
-                                ray shadowRay;
-                                shadowRay.origin = giHitPos + giNormal * bias;
-                                shadowRay.direction = lightDirSample;
-                                shadowRay.min_distance = bias;
-                                shadowRay.max_distance = max(distToSample - bias, 0.0);
-                                float visibility = traceShadow(shadowRay, accelStructure, shadowRay.max_distance) ? 0.0 : 1.0;
-
-                                // Include light's cosine foreshortening for area lights to better match rectangular emission
-                                if (light.type == 1) {
-                                    float3 areaDirLocal = normalize(light.direction);
-                                    float nl_light = max(0.0, dot(-lightDirSample, areaDirLocal));
-                                    float area = max(1e-6, light.size.x * light.size.y);
-                                    lightColor *= nl_light * area;
-                                }
-
-                                float3 contrib = (albedoClamped * INV_PI) * (nl * visibility) * lightColor * attenuation;
-                                // Scale for uniform light selection
-                                contrib *= float(lightCount);
-                                giColor += throughput * contrib;
-                            }
-                        }
-                    }
-
-                    // Update throughput for next bounce (Lambertian BRDF expectation under cosine sampling)
-                    throughput *= (albedoClamped * INV_PI);
-                    throughput = clamp(throughput, float3(0.0), float3(10.0));
-
-                    // Russian roulette after a few bounces
+                    // Russian roulette
                     if (bounce >= 2) {
-                        float p = clamp(max(throughput.x, max(throughput.y, throughput.z)), 0.05, 0.9);
-                        if (random(giSeed) > p) {
-                            break;
-                        }
+                        float p = clamp(max(throughput.x, max(throughput.y, throughput.z)), 0.05, 0.95);
+                        if (random(giSeed) > p) { break; }
                         throughput /= p;
                         giSeed = pcg_hash(giSeed + 0x165667B1u);
                     }
-
-                    bounceOrigin = giHitPos;
-                    bounceNormal = giNormal;
                 }
             }
 

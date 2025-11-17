@@ -53,6 +53,10 @@ class Renderer: NSObject, MTKViewDelegate, @unchecked Sendable{
     private var giMinDistance: Float = 0.001
     private var giBias: Float = 0.001
     private var giSampleDistribution: [UInt8] = Array("cosine".utf8) // Options: "uniform", "cosine"
+    
+    // Specular path tracing settings
+    private var specularEnabled: Bool = true
+    private var specularBounces: UInt32 = 2
 
     // Materials
     private let materialLibrary = MaterialLibrary()
@@ -151,6 +155,17 @@ extension Renderer {
     
     func toggleGI() {
         giEnabled.toggle()
+        resetAccumulation()
+    }
+
+    // Specular settings
+    func setSpecularEnabled(_ enabled: Bool) {
+        specularEnabled = enabled
+        resetAccumulation()
+    }
+
+    func setSpecularBounces(_ bounces: UInt32) {
+        specularBounces = bounces
         resetAccumulation()
     }
     
@@ -742,6 +757,10 @@ extension Renderer {
         computeEncoder.setBytes(&envRotationVar, length: MemoryLayout<SIMD3<Float>>.stride, index: 25)
         computeEncoder.setBytes(&envTintVar, length: MemoryLayout<SIMD3<Float>>.stride, index: 26)
         computeEncoder.setBytes(&envRenderVar, length: MemoryLayout<UInt32>.stride, index: 27)
+        var specularEnabledInt: UInt32 = specularEnabled ? 1 : 0
+        var specularBouncesVar: UInt32 = specularBounces
+        computeEncoder.setBytes(&specularEnabledInt, length: MemoryLayout<UInt32>.stride, index: 28)
+        computeEncoder.setBytes(&specularBouncesVar, length: MemoryLayout<UInt32>.stride, index: 29)
 
         // Materials buffers (20+)
         computeEncoder.setBytes(&materialCount, length: MemoryLayout<UInt32>.stride, index: 20)
