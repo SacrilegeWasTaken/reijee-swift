@@ -47,7 +47,7 @@ class ShaderLibrary {
         
         let descriptor = MTLRenderPipelineDescriptor()
         descriptor.vertexFunction = vertexFunc
-        descriptor.fragmentFunction = fragmentFunc
+        descriptor.fragmentFunction = fragmentFunc 
         descriptor.colorAttachments[0].pixelFormat = pixelFormat
         
         pipelines[name] = try! device.makeRenderPipelineState(descriptor: descriptor)
